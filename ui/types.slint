@@ -1,0 +1,29 @@
+// Shared data types imported by both app.slint and other components.
+// This file must not import from app.slint to avoid circular dependencies.
+
+export struct MonthEntry {
+    label: string,
+    year: int,
+    month: int,
+    row-index: int,
+}
+
+export struct ThumbnailData {
+    item-id: int,
+    thumb-image: image,
+    thumb-ready: bool,
+    media-type: string,  // "image" | "video"
+}
+
+export struct GalleryRowData {
+    is-header: bool,
+    header-label: string,
+    items: [ThumbnailData],
+    item-count: int,
+}
+
+export struct ViewerItem {
+    item-id: int,
+    path: string,
+    media-type: string,
+}

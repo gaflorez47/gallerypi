@@ -1,0 +1,42 @@
+import { ListView } from "std-widgets.slint";
+import { MonthEntry } from "types.slint";
+
+component MonthEntryItem {
+    in property <string> label;
+    in property <bool> selected;
+    callback tapped();
+
+    height: 36px;
+    Rectangle {
+        background: selected ? #3a5a8a : transparent;
+        border-radius: 4px;
+        TouchArea {
+            clicked => { tapped(); }
+        }
+        Text {
+            text: label;
+            color: selected ? white : #aaaaaa;
+            font-size: 12px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+}
+
+export component MonthScroller {
+    in property <[MonthEntry]> month-entries;
+    in-out property <int> selected-year;
+    in-out property <int> selected-month;
+    callback jump-to-month(int, int);
+
+    Rectangle {
+        background: #161616;
+        ListView {
+            for entry in month-entries: MonthEntryItem {
+                label: entry.label;
+                selected: entry.year == selected-year && entry.month == selected-month;
+                tapped() => { jump-to-month(entry.year, entry.month); }
+            }
+        }
+    }
+}

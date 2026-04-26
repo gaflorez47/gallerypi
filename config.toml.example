@@ -1,0 +1,17 @@
+[gallery]
+media_dir = "/home/pi/Pictures"
+grid_columns = 4        # 3–6
+thumbnail_size = 256    # pixels, square
+
+[performance]
+thumb_gen_threads = 2   # 2 on RPi 4, 4 on desktop
+thumb_cache_entries = 150
+scan_on_startup = true
+
+[ui]
+fullscreen = true
+
+[video]
+hardware_decode = true  # uses v4l2m2m-copy on aarch64, auto-safe elsewhere
+default_volume = 80     # 0–100
+loop_videos = true

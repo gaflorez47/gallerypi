@@ -1,0 +1,132 @@
+import { ListView } from "std-widgets.slint";
+import { MonthEntry, GalleryRowData, ThumbnailData } from "types.slint";
+import { MonthScroller } from "month_scroller.slint";
+import { ThumbnailCell } from "thumbnail_cell.slint";
+
+component MonthHeaderRow {
+    in property <string> label;
+    height: 48px;
+    Rectangle {
+        background: #1a1a1a;
+        Text {
+            x: 16px;
+            text: label;
+            color: #aaaaaa;
+            font-size: 15px;
+            font-weight: 600;
+            vertical-alignment: center;
+        }
+    }
+}
+
+component ImageRow {
+    in property <[ThumbnailData]> items;
+    in property <int> item-count;
+    in property <length> thumb-size;
+    callback item-tapped(int, string);
+
+    height: thumb-size + 4px;
+    HorizontalLayout {
+        spacing: 2px;
+        padding: 2px;
+        for item[i] in items: ThumbnailCell {
+            visible: i < item-count;
+            item-id: item.item-id;
+            thumb-image: item.thumb-image;
+            thumb-ready: item.thumb-ready;
+            media-type: item.media-type;
+            size: thumb-size;
+            tapped(id, mt) => { item-tapped(id, mt); }
+        }
+    }
+}
+
+component GalleryRowDelegate {
+    in property <GalleryRowData> row-data;
+    in property <length> thumb-size;
+    callback item-tapped(int, string);
+
+    height: row-data.is-header ? 48px : (thumb-size + 4px);
+
+    if row-data.is-header: MonthHeaderRow {
+        label: row-data.header-label;
+    }
+    if !row-data.is-header: ImageRow {
+        items: row-data.items;
+        item-count: row-data.item-count;
+        thumb-size: thumb-size;
+        item-tapped(id, mt) => { item-tapped(id, mt); }
+    }
+}
+
+export component GalleryScreen {
+    in property <[GalleryRowData]> gallery-rows;
+    in property <[MonthEntry]> month-entries;
+    in-out property <int> grid-columns: 4;
+    in-out property <length> thumb-size: 256px;
+    // Set to row index >= 0 to trigger an instant scroll (no animation)
+    in property <int> scroll-to-row: -1;
+
+    callback item-tapped(int, string);
+    callback jump-to-month(int, int);
+    callback reminisce-tapped();
+
+    // Compute the row height: header rows are 48px, image rows are thumb-size + 4px.
+    // We use thumb-size + 4px as an approximation for uniform-row scrolling.
+    private property <length> row-height: thumb-size + 4px;
+
+    // Scroll instantly when scroll-to-row changes (no animation)
+    changed scroll-to-row => {
+        if scroll-to-row >= 0 {
+            list-view.viewport-y = -(scroll-to-row * row-height);
+        }
+    }
+
+    VerticalLayout {
+        // Toolbar
+        Rectangle {
+            height: 52px;
+            background: #1a1a1a;
+            HorizontalLayout {
+                padding: 8px;
+                spacing: 8px;
+                alignment: end;
+                Rectangle {
+                    background: #3a5a8a;
+                    border-radius: 6px;
+                    width: 120px;
+                    height: 36px;
+                    TouchArea {
+                        clicked => { reminisce-tapped(); }
+                    }
+                    Text {
+                        text: "Reminisce";
+                        color: white;
+                        font-size: 14px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+
+        // Main content: grid + month scroller
+        HorizontalLayout {
+            // Gallery list view (main area)
+            list-view := ListView {
+                for row in gallery-rows: GalleryRowDelegate {
+                    row-data: row;
+                    thumb-size: root.thumb-size;
+                    item-tapped(id, mt) => { root.item-tapped(id, mt); }
+                }
+            }
+
+            // Month scroller sidebar
+            MonthScroller {
+                width: 110px;
+                month-entries: root.month-entries;
+                jump-to-month(y, m) => { root.jump-to-month(y, m); }
+            }
+        }
+    }
+}

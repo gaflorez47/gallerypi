@@ -1,0 +1,78 @@
+import { GalleryScreen } from "gallery.slint";
+import { ViewerScreen } from "viewer.slint";
+import { VideoPlayer } from "video_player.slint";
+import { MonthEntry, GalleryRowData, ThumbnailData, ViewerItem } from "types.slint";
+
+export { MonthEntry, GalleryRowData, ThumbnailData, ViewerItem }
+
+export enum Screen { Gallery, Viewer, Video }
+
+export component AppWindow inherits Window {
+    title: "GalleryPi";
+    background: #111111;
+
+    // Screen routing
+    in-out property <Screen> current-screen: Screen.Gallery;
+
+    // Gallery data (wired from Rust)
+    in property <[GalleryRowData]> gallery-rows;
+    in property <[MonthEntry]> month-entries;
+    in-out property <int> grid-columns: 4;
+    // thumb-size in logical pixels (set as float from Rust)
+    in-out property <length> thumb-size: 256px;
+    // Set to a row index >= 0 to trigger an instant scroll in the gallery
+    in-out property <int> gallery-scroll-to-row: -1;
+
+    callback item-tapped(int, string);       // item_id, media_type
+    callback jump-to-month(int, int);        // year, month
+    callback reminisce-tapped();
+
+    // Viewer state
+    in property <image> viewer-image;
+    in property <bool> viewer-loading;
+    callback viewer-close();
+    callback viewer-swipe-left();
+    callback viewer-swipe-right();
+
+    // Video state
+    in property <image> video-frame;
+    in-out property <float> video-position;
+    in property <float> video-duration;
+    in-out property <float> video-volume: 0.8;
+    in property <bool> video-playing;
+    callback video-close();
+    callback video-play-pause();
+    callback video-seek(float);
+    callback video-volume-changed(float);
+
+    if current-screen == Screen.Gallery: GalleryScreen {
+        gallery-rows: root.gallery-rows;
+        month-entries: root.month-entries;
+        grid-columns: root.grid-columns;
+        thumb-size: root.thumb-size;
+        scroll-to-row: root.gallery-scroll-to-row;
+        item-tapped(id, mt) => { root.item-tapped(id, mt); }
+        jump-to-month(y, m) => { root.jump-to-month(y, m); }
+        reminisce-tapped() => { root.reminisce-tapped(); }
+    }
+
+    if current-screen == Screen.Viewer: ViewerScreen {
+        viewer-image: root.viewer-image;
+        loading: root.viewer-loading;
+        close() => { root.viewer-close(); }
+        swipe-left() => { root.viewer-swipe-left(); }
+        swipe-right() => { root.viewer-swipe-right(); }
+    }
+
+    if current-screen == Screen.Video: VideoPlayer {
+        video-frame: root.video-frame;
+        position: root.video-position;
+        duration: root.video-duration;
+        volume: root.video-volume;
+        playing: root.video-playing;
+        close() => { root.video-close(); }
+        play-pause() => { root.video-play-pause(); }
+        seek(p) => { root.video-seek(p); }
+        volume-changed(v) => { root.video-volume-changed(v); }
+    }
+}

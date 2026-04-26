@@ -1,0 +1,109 @@
+export component ViewerScreen {
+    in property <image> viewer-image;
+    in property <bool> loading;
+    callback close();
+    callback swipe-left();
+    callback swipe-right();
+
+    private property <float> scale: 1.0;
+    private property <length> offset-x: 0px;
+    private property <length> offset-y: 0px;
+    private property <length> drag-start-x;
+    private property <length> drag-start-y;
+    private property <length> drag-start-offset-x;
+    private property <length> drag-start-offset-y;
+    private property <length> swipe-start-x;
+    private property <bool> is-dragging: false;
+
+    Rectangle {
+        background: black;
+        width: parent.width;
+        height: parent.height;
+
+        Image {
+            source: viewer-image;
+            width: parent.width * scale;
+            height: parent.height * scale;
+            x: (parent.width - self.width) / 2 + offset-x;
+            y: (parent.height - self.height) / 2 + offset-y;
+            image-fit: contain;
+        }
+
+        if loading: Rectangle {
+            background: #00000088;
+            Text {
+                text: "Loading…";
+                color: white;
+                font-size: 18px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        TouchArea {
+            pointer-event(e) => {
+                if e.kind == PointerEventKind.down {
+                    is-dragging = true;
+                    swipe-start-x = self.mouse-x;
+                    drag-start-x = self.mouse-x;
+                    drag-start-y = self.mouse-y;
+                    drag-start-offset-x = offset-x;
+                    drag-start-offset-y = offset-y;
+                } else if e.kind == PointerEventKind.up {
+                    is-dragging = false;
+                    if scale <= 1.05 {
+                        if self.mouse-x - swipe-start-x > parent.width * 0.3 {
+                            swipe-right();
+                            offset-x = 0px;
+                            offset-y = 0px;
+                        } else if swipe-start-x - self.mouse-x > parent.width * 0.3 {
+                            swipe-left();
+                            offset-x = 0px;
+                            offset-y = 0px;
+                        }
+                    }
+                }
+            }
+            moved => {
+                if is-dragging && scale > 1.05 {
+                    offset-x = drag-start-offset-x + (self.mouse-x - drag-start-x);
+                    offset-y = drag-start-offset-y + (self.mouse-y - drag-start-y);
+                }
+            }
+            scroll-event(e) => {
+                // delta-y is length; divide by 1px to get a dimensionless float
+                scale = max(1.0, min(8.0, scale * (1.0 + (e.delta-y / 1px) * 0.002)));
+                if scale <= 1.0 {
+                    offset-x = 0px;
+                    offset-y = 0px;
+                }
+                EventResult.accept
+            }
+        }
+
+        // Close button (top-right)
+        Rectangle {
+            x: parent.width - 52px;
+            y: 8px;
+            width: 44px;
+            height: 44px;
+            background: #00000099;
+            border-radius: 22px;
+            TouchArea {
+                clicked => {
+                    scale = 1.0;
+                    offset-x = 0px;
+                    offset-y = 0px;
+                    close();
+                }
+            }
+            Text {
+                text: "✕";
+                color: white;
+                font-size: 18px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+    }
+}

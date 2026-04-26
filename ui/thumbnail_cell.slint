@@ -1,0 +1,49 @@
+export component ThumbnailCell {
+    in property <int> item-id;
+    in property <image> thumb-image;
+    in property <bool> thumb-ready;
+    in property <string> media-type;
+    in property <length> size: 256px;
+    callback tapped(int, string);
+
+    width: size;
+    height: size;
+
+    Rectangle {
+        background: #222222;
+        border-radius: 2px;
+
+        if thumb-ready: Image {
+            source: thumb-image;
+            width: parent.width;
+            height: parent.height;
+            image-fit: cover;
+        }
+
+        if !thumb-ready: Rectangle {
+            background: #2a2a2a;
+            // Placeholder shimmer
+        }
+
+        // Video indicator overlay
+        if media-type == "video": Rectangle {
+            x: parent.width - 28px;
+            y: parent.height - 28px;
+            width: 24px;
+            height: 24px;
+            background: #00000088;
+            border-radius: 12px;
+            Text {
+                text: "▶";
+                color: white;
+                font-size: 10px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        TouchArea {
+            clicked => { tapped(item-id, media-type); }
+        }
+    }
+}

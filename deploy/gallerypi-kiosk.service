@@ -1,0 +1,37 @@
+# Systemd service for GalleryPi kiosk mode on Raspberry Pi OS (Wayland).
+# Runs gallerypi fullscreen inside `cage` (a minimal single-app Wayland compositor).
+#
+# Install:
+#   sudo apt install cage
+#   sudo cp gallerypi-kiosk.service /etc/systemd/system/
+#   sudo systemctl enable gallerypi-kiosk
+#   sudo systemctl start gallerypi-kiosk
+#
+# Replace User/ExecStart paths as needed.
+
+[Unit]
+Description=GalleryPi Kiosk
+After=graphical-session.target
+Wants=graphical-session.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+Environment=HOME=/home/pi
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=WAYLAND_DISPLAY=wayland-1
+Environment=RUST_LOG=gallerypi=info
+
+# cage provides a minimal fullscreen Wayland compositor for a single app
+ExecStart=/usr/bin/cage -- /home/pi/gallerypi/gallerypi
+
+Restart=on-failure
+RestartSec=3s
+
+# Prevent it from restarting too fast
+StartLimitIntervalSec=30
+StartLimitBurst=5
+
+[Install]
+WantedBy=graphical-session.target

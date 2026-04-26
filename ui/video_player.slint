@@ -1,0 +1,171 @@
+export component VideoPlayer {
+    in property <image> video-frame;
+    in-out property <float> position;
+    in property <float> duration;
+    in-out property <float> volume;
+    in property <bool> playing;
+    callback close();
+    callback play-pause();
+    callback seek(float);
+    callback volume-changed(float);
+
+    private property <bool> controls-visible: true;
+
+    Rectangle {
+        background: black;
+        width: parent.width;
+        height: parent.height;
+
+        // Video frame
+        Image {
+            source: video-frame;
+            width: parent.width;
+            height: parent.height;
+            image-fit: contain;
+        }
+
+        // Tap to toggle controls
+        TouchArea {
+            clicked => {
+                controls-visible = !controls-visible;
+            }
+        }
+
+        // Controls overlay (bottom bar)
+        if controls-visible: Rectangle {
+            y: parent.height - 100px;
+            height: 100px;
+            width: parent.width;
+            background: #000000cc;
+
+            VerticalLayout {
+                padding: 8px;
+                spacing: 4px;
+
+                // Seek bar row
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: center;
+                    Text {
+                        text: Math.floor(position / 60) + ":" + (Math.floor(Math.mod(position, 60)) < 10 ? "0" : "") + Math.floor(Math.mod(position, 60));
+                        color: white;
+                        font-size: 12px;
+                        vertical-alignment: center;
+                        min-width: 40px;
+                    }
+                    Rectangle {
+                        height: 4px;
+                        background: #444444;
+                        border-radius: 2px;
+                        Rectangle {
+                            width: duration > 0 ? parent.width * (position / duration) : 0px;
+                            height: parent.height;
+                            background: #5588cc;
+                            border-radius: 2px;
+                        }
+                        TouchArea {
+                            clicked => {
+                                seek(self.mouse-x / self.width * duration);
+                            }
+                        }
+                    }
+                    Text {
+                        text: Math.floor(duration / 60) + ":" + (Math.floor(Math.mod(duration, 60)) < 10 ? "0" : "") + Math.floor(Math.mod(duration, 60));
+                        color: #888888;
+                        font-size: 12px;
+                        vertical-alignment: center;
+                        min-width: 40px;
+                    }
+                }
+
+                // Buttons row
+                HorizontalLayout {
+                    spacing: 12px;
+                    alignment: center;
+
+                    // Play/Pause
+                    Rectangle {
+                        width: 44px;
+                        height: 36px;
+                        background: #333333;
+                        border-radius: 6px;
+                        TouchArea {
+                            clicked => { play-pause(); }
+                        }
+                        Text {
+                            text: playing ? "⏸" : "▶";
+                            color: white;
+                            font-size: 16px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    Text {
+                        text: "Vol";
+                        color: #888888;
+                        font-size: 12px;
+                        vertical-alignment: center;
+                    }
+
+                    // Volume bar
+                    Rectangle {
+                        width: 80px;
+                        height: 4px;
+                        background: #444444;
+                        border-radius: 2px;
+                        Rectangle {
+                            width: parent.width * volume;
+                            height: parent.height;
+                            background: #888888;
+                            border-radius: 2px;
+                        }
+                        TouchArea {
+                            clicked => {
+                                volume-changed(self.mouse-x / self.width);
+                            }
+                        }
+                    }
+
+                    // Close
+                    Rectangle {
+                        width: 44px;
+                        height: 36px;
+                        background: #333333;
+                        border-radius: 6px;
+                        TouchArea {
+                            clicked => { close(); }
+                        }
+                        Text {
+                            text: "✕";
+                            color: white;
+                            font-size: 16px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Minimal close button when controls hidden
+        if !controls-visible: Rectangle {
+            x: parent.width - 52px;
+            y: 8px;
+            width: 44px;
+            height: 44px;
+            background: #00000099;
+            border-radius: 22px;
+            TouchArea {
+                clicked => { close(); }
+            }
+            Text {
+                text: "✕";
+                color: white;
+                font-size: 18px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
