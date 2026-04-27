@@ -1,3 +1,18 @@
+export DISPLAY=localhost:0
+cargo build
+RUST_LOG=gallerypi=info ./target/debug/gallerypi
+
+
+----------------------------
+- Responsive layout
+- screenshot tests
+- recycler view StandardListView with VecModel 
+- If no config file, file picker and save config
+
+
+
+---------------
+
 Hardware & Performance
   1. Raspberry pi 4, 1GB RAM
   2. fullscreen. Not sure about desktop or bare-metal, please explain

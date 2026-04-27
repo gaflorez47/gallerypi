@@ -45,6 +45,9 @@ impl GalleryController {
             .into_iter()
             .map(|(y, m, _, row_idx)| MonthEntry::new(y, m, row_idx))
             .collect();
+
+        tracing::info!("Gallery reload month entries {}", self.month_entries.len());
+
         self.item_positions = positions;
 
         // Rebuild Slint model — set_vec replaces all rows at once

@@ -7,9 +7,13 @@ edition = "2021"
 name = "gallerypi"
 path = "src/main.rs"
 
+[[bin]]
+name = "screenshot_test"
+path = "src/bin/screenshot_test.rs"
+
 [dependencies]
 # UI
-slint = { version = "1.9", features = ["backend-winit", "renderer-skia"] }
+slint = { version = "1.9", features = ["backend-winit", "renderer-skia", "renderer-software"] }
 
 # Database
 rusqlite = { version = "0.32", features = ["bundled"] }

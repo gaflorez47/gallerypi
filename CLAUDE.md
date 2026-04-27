@@ -98,4 +98,8 @@ sudo systemctl enable --now gallerypi-kiosk
 ```bash
 sudo apt install libmpv-dev  # required for build (mpv IPC uses system mpv binary at runtime)
 sudo apt install cage         # for kiosk mode
+sudo apt install libxkbcommon-x11-0
 ```
+
+# WSL
+`export DISPLAY=localhost:0`

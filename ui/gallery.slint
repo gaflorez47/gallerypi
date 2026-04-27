@@ -5,16 +5,16 @@ import { ThumbnailCell } from "thumbnail_cell.slint";
 
 component MonthHeaderRow {
     in property <string> label;
-    height: 48px;
+    
     Rectangle {
-        background: #1a1a1a;
         Text {
             x: 16px;
             text: label;
             color: #aaaaaa;
-            font-size: 15px;
+            font-size: 24px;
             font-weight: 600;
             vertical-alignment: center;
+            horizontal-alignment: left;
         }
     }
 }
@@ -27,6 +27,7 @@ component ImageRow {
 
     height: thumb-size + 4px;
     HorizontalLayout {
+        height: 200px;
         spacing: 2px;
         padding: 2px;
         for item[i] in items: ThumbnailCell {
@@ -83,6 +84,7 @@ export component GalleryScreen {
     }
 
     VerticalLayout {
+        width: parent.width;
         // Toolbar
         Rectangle {
             height: 52px;
@@ -123,7 +125,7 @@ export component GalleryScreen {
 
             // Month scroller sidebar
             MonthScroller {
-                width: 110px;
+                width: 50px;
                 month-entries: root.month-entries;
                 jump-to-month(y, m) => { root.jump-to-month(y, m); }
             }

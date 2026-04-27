@@ -45,7 +45,12 @@ export component AppWindow inherits Window {
     callback video-seek(float);
     callback video-volume-changed(float);
 
+
+
+
     if current-screen == Screen.Gallery: GalleryScreen {
+        height: root.height;
+        width: root.width;
         gallery-rows: root.gallery-rows;
         month-entries: root.month-entries;
         grid-columns: root.grid-columns;
@@ -57,6 +62,8 @@ export component AppWindow inherits Window {
     }
 
     if current-screen == Screen.Viewer: ViewerScreen {
+    height: root.height;
+        width: root.width;
         viewer-image: root.viewer-image;
         loading: root.viewer-loading;
         close() => { root.viewer-close(); }
@@ -65,6 +72,8 @@ export component AppWindow inherits Window {
     }
 
     if current-screen == Screen.Video: VideoPlayer {
+    height: root.height;
+        width: root.width;
         video-frame: root.video-frame;
         position: root.video-position;
         duration: root.video-duration;
