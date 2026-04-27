@@ -72,6 +72,10 @@ export component GalleryScreen {
     callback jump-to-month(int, int);
     callback reminisce-tapped();
 
+    // Current scroll position (pixels scrolled down) and visible area height — read by Rust.
+    out property <float> scroll-offset: -list-view.viewport-y / 1px;
+    out property <float> viewport-height: list-view.height / 1px;
+
     // Compute the row height: header rows are 48px, image rows are thumb-size + 4px.
     // We use thumb-size + 4px as an approximation for uniform-row scrolling.
     private property <length> row-height: thumb-size + 4px;

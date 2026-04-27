@@ -1,10 +1,17 @@
 use crate::config::Config;
-use crate::db::{queries, Database};
+use crate::db::queries;
 use crate::util::hash::thumb_cache_key;
 use anyhow::Result;
+use crossbeam_channel::{bounded, Receiver, Sender};
 use fast_image_resize::images::Image as FirImage;
 use fast_image_resize::{PixelType, Resizer};
 use std::path::{Path, PathBuf};
+
+pub struct GenJob {
+    pub item_id: i64,
+    pub path: String,
+    pub mtime: i64,
+}
 
 pub fn generate_thumbnail(
     source_path: &Path,
@@ -50,94 +57,53 @@ pub fn generate_thumbnail(
     Ok(thumb_path)
 }
 
-/// Spawn background thumbnail generation for all images missing thumbnails.
-/// Sends `(item_id, thumb_path)` on `thumb_tx` for each successfully generated thumbnail
-/// so the main thread can request loading immediately.
-pub fn run_generation(
+/// Start a persistent on-demand thumbnail generator.
+/// Returns (job_tx, result_rx). Send GenJob items on job_tx; completed (item_id, thumb_path)
+/// arrive on result_rx. The worker thread runs for the lifetime of the app.
+pub fn start_on_demand_generator(
     config: &Config,
     db_path: &Path,
-    thumb_tx: crossbeam_channel::Sender<(i64, String)>,
-) {
+) -> (Sender<GenJob>, Receiver<(i64, String)>) {
     let thumb_dir = crate::config::thumb_dir();
     let thumb_size = config.gallery.thumbnail_size;
-    let n_threads = config.performance.thumb_gen_threads;
     let db_path = db_path.to_path_buf();
 
-    std::thread::spawn(move || {
-        let pool = match rayon::ThreadPoolBuilder::new()
-            .num_threads(n_threads)
-            .build()
-        {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::error!("Failed to build rayon pool: {}", e);
-                return;
-            }
-        };
+    let (job_tx, job_rx) = bounded::<GenJob>(256);
+    let (result_tx, result_rx) = bounded::<(i64, String)>(256);
 
-        let conn = match rusqlite::Connection::open(&db_path) {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::error!("Thumb generator failed to open DB: {}", e);
-                return;
-            }
-        };
+    std::thread::Builder::new()
+        .name("thumb-gen".into())
+        .spawn(move || {
+            let conn = match rusqlite::Connection::open(&db_path) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::error!("Thumb generator failed to open DB: {}", e);
+                    return;
+                }
+            };
 
-        let items = match queries::get_items_needing_thumbnails(&conn) {
-            Ok(items) => items,
-            Err(e) => {
-                tracing::error!("Failed to query items needing thumbnails: {}", e);
-                return;
-            }
-        };
-
-        if items.is_empty() {
-            tracing::info!("All thumbnails up to date");
-            return;
-        }
-
-        tracing::info!(
-            "Generating {} thumbnails with {} threads",
-            items.len(),
-            n_threads
-        );
-
-        pool.install(|| {
-            use rayon::prelude::*;
-            items.par_iter().for_each(|(id, path)| {
+            for job in job_rx {
                 // Small sleep on RPi to prevent thermal throttle
                 #[cfg(target_arch = "aarch64")]
                 std::thread::sleep(std::time::Duration::from_millis(5));
 
-                let source_path = Path::new(path);
-                let mtime = std::fs::metadata(source_path)
-                    .ok()
-                    .and_then(|m| m.modified().ok())
-                    .and_then(|t| {
-                        t.duration_since(std::time::SystemTime::UNIX_EPOCH)
-                            .ok()
-                            .map(|d| d.as_secs() as i64)
-                    })
-                    .unwrap_or(0);
-
-                match generate_thumbnail(source_path, mtime, &thumb_dir, thumb_size) {
+                let source_path = Path::new(&job.path);
+                match generate_thumbnail(source_path, job.mtime, &thumb_dir, thumb_size) {
                     Ok(thumb_path) => {
-                        if let Ok(conn) = rusqlite::Connection::open(&db_path) {
-                            let thumb_str = thumb_path.to_string_lossy().into_owned();
-                            if let Err(e) = queries::mark_thumb_ready(&conn, *id, &thumb_str) {
-                                tracing::warn!("Failed to mark thumb ready for id {}: {}", id, e);
-                            } else {
-                                let _ = thumb_tx.send((*id, thumb_str));
-                            }
+                        let thumb_str = thumb_path.to_string_lossy().into_owned();
+                        if let Err(e) = queries::mark_thumb_ready(&conn, job.item_id, &thumb_str) {
+                            tracing::warn!("Failed to mark thumb ready for id {}: {}", job.item_id, e);
+                        } else {
+                            let _ = result_tx.send((job.item_id, thumb_str));
                         }
                     }
                     Err(e) => {
-                        tracing::warn!("Failed to generate thumb for {}: {}", path, e);
+                        tracing::warn!("Failed to generate thumb for {}: {}", job.path, e);
                     }
                 }
-            });
-        });
+            }
+        })
+        .expect("Failed to spawn thumb-gen thread");
 
-        tracing::info!("Thumbnail generation complete");
-    });
+    (job_tx, result_rx)
 }

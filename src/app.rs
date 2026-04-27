@@ -2,7 +2,7 @@ use crate::config::Config;
 use crate::db::Database;
 use crate::gallery::GalleryController;
 use crate::scanner::{ScanEvent, Scanner};
-use crate::thumbnail::generator;
+use crate::thumbnail::generator::{self, GenJob};
 use crate::thumbnail::ThumbnailLoader;
 use crate::ui::{AppWindow, Screen};
 use crate::video::VideoController;
@@ -11,23 +11,33 @@ use anyhow::Result;
 use crossbeam_channel::bounded;
 use slint::{ComponentHandle, SharedPixelBuffer, Timer, TimerMode};
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::rc::Rc;
 
+/// How many extra rows above and below the visible area to pre-load.
+const SCROLL_BUFFER_ROWS: usize = 2;
+
 pub fn run(config: Config, db_path: PathBuf) -> Result<()> {
     let db = Rc::new(RefCell::new(Database::open(&db_path)?));
+    let thumb_size = config.gallery.thumbnail_size as f32;
 
     let n_cols = config.gallery.grid_columns as usize;
     let mut gallery_ctrl = GalleryController::new(n_cols);
-    gallery_ctrl.reload(&db.borrow())?;
+    gallery_ctrl.reload(&db.borrow(), thumb_size)?;
 
-    // Create thumb_loader early so we can pre-request thumbnails
-    let mut initial_loader = ThumbnailLoader::new(config.performance.thumb_cache_entries);
-    gallery_ctrl.request_ready_thumbnails(&mut initial_loader, 200);
+    let thumb_loader = Rc::new(RefCell::new(ThumbnailLoader::new(
+        config.performance.thumb_cache_entries,
+    )));
+
+    // Start the persistent on-demand generator immediately.
+    crate::util::paths::ensure_thumb_dir().ok();
+    let (gen_tx, gen_rx) = generator::start_on_demand_generator(&config, &db_path);
+    let gen_tx = Rc::new(gen_tx);
 
     let window = AppWindow::new()?;
     window.set_grid_columns(n_cols as i32);
-    window.set_thumb_size(config.gallery.thumbnail_size as f32);
+    window.set_thumb_size(thumb_size);
     window.set_gallery_rows(gallery_ctrl.row_model_rc());
     window.set_month_entries(gallery_ctrl.build_month_model());
 
@@ -38,50 +48,36 @@ pub fn run(config: Config, db_path: PathBuf) -> Result<()> {
     let gallery_ctrl = Rc::new(RefCell::new(gallery_ctrl));
     let viewer_ctrl = Rc::new(RefCell::new(ViewerController::new()));
     let video_ctrl = Rc::new(RefCell::new(VideoController::new(config.video.clone())));
-    let thumb_loader = Rc::new(RefCell::new(initial_loader));
 
     // --- Scanner ---
-    let (scan_rx, gen_rx): (
-        Option<crossbeam_channel::Receiver<ScanEvent>>,
-        Option<crossbeam_channel::Receiver<(i64, String)>>,
-    ) = if config.performance.scan_on_startup {
-        let (scan_tx, scan_rx) = bounded::<ScanEvent>(32);
-        let media_dir = config.gallery.media_dir.clone();
-        let db_path_scan = db_path.clone();
+    let scan_rx: Option<crossbeam_channel::Receiver<ScanEvent>> =
+        if config.performance.scan_on_startup {
+            let (scan_tx, scan_rx) = bounded::<ScanEvent>(32);
+            let media_dir = config.gallery.media_dir.clone();
+            let db_path_scan = db_path.clone();
 
-        std::thread::spawn(move || {
-            match Database::open(&db_path_scan) {
-                Ok(mut scan_db) => {
-                    let scanner = Scanner::new(media_dir, scan_tx);
-                    if let Err(e) = scanner.run(&mut scan_db) {
-                        tracing::error!("Scanner error: {}", e);
+            std::thread::spawn(move || {
+                match Database::open(&db_path_scan) {
+                    Ok(mut scan_db) => {
+                        let scanner = Scanner::new(media_dir, scan_tx);
+                        if let Err(e) = scanner.run(&mut scan_db) {
+                            tracing::error!("Scanner error: {}", e);
+                        }
                     }
+                    Err(e) => tracing::error!("Scanner DB open failed: {}", e),
                 }
-                Err(e) => tracing::error!("Scanner DB open failed: {}", e),
-            }
-        });
+            });
 
-        // Start thumbnail generation after scan completes (with delay)
-        let config_clone = config.clone();
-        let db_path_gen = db_path.clone();
-        let (gen_tx, gen_rx) = crossbeam_channel::bounded::<(i64, String)>(256);
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            crate::util::paths::ensure_thumb_dir().ok();
-            generator::run_generation(&config_clone, &db_path_gen, gen_tx);
-        });
-
-        (Some(scan_rx), Some(gen_rx))
-    } else {
-        (None, None)
-    };
+            Some(scan_rx)
+        } else {
+            None
+        };
 
     // Poll scan channel from main thread via Timer (avoids Rc<> crossing thread boundary)
     let scan_timer = Timer::default();
     if let Some(rx) = scan_rx {
         let gallery_clone = gallery_ctrl.clone();
         let db_clone = db.clone();
-        let thumb_loader_clone = thumb_loader.clone();
         let window_weak = window.as_weak();
         scan_timer.start(
             TimerMode::Repeated,
@@ -93,14 +89,10 @@ pub fn run(config: Config, db_path: PathBuf) -> Result<()> {
                             tracing::info!("Scan complete ({} files), reloading", total);
                             if let Some(w) = window_weak.upgrade() {
                                 let mut gallery = gallery_clone.borrow_mut();
-                                if let Err(e) = gallery.reload(&db_clone.borrow()) {
+                                if let Err(e) = gallery.reload(&db_clone.borrow(), thumb_size) {
                                     tracing::error!("Gallery reload: {}", e);
                                     return;
                                 }
-                                gallery.request_ready_thumbnails(
-                                    &mut thumb_loader_clone.borrow_mut(),
-                                    200,
-                                );
                                 w.set_gallery_rows(gallery.row_model_rc());
                                 w.set_month_entries(gallery.build_month_model());
                             }
@@ -278,29 +270,60 @@ pub fn run(config: Config, db_path: PathBuf) -> Result<()> {
         );
     }
 
-    // Thumbnail result polling (50ms) — all on main thread, no Send needed
+    // Thumbnail polling (50ms): determine visible rows, request load/generation as needed.
+    // gen_queued deduplicates generation requests across ticks.
     let thumb_timer = Timer::default();
     {
         let thumb_loader = thumb_loader.clone();
         let gallery_clone = gallery_ctrl.clone();
+        let window_weak3 = window.as_weak();
+        let mut gen_queued: HashSet<i64> = HashSet::new();
         thumb_timer.start(
             TimerMode::Repeated,
             std::time::Duration::from_millis(50),
             move || {
-                // Enqueue newly generated thumbnails into the loader
-                if let Some(ref rx) = gen_rx {
-                    let gallery = gallery_clone.borrow();
-                    while let Ok((id, path)) = rx.try_recv() {
-                        if let Some(img) = thumb_loader.borrow_mut().request(id, &path) {
-                            gallery.update_thumbnail(id, img);
-                        }
+                // Deliver newly generated thumbnails → enqueue disk load.
+                while let Ok((id, path)) = gen_rx.try_recv() {
+                    let img = thumb_loader.borrow_mut().request(id, &path);
+                    if let Some(img) = img {
+                        gallery_clone.borrow().update_thumbnail(id, img);
                     }
+                    // else: load job enqueued; arrives via poll_results below
                 }
+
+                // Deliver completed disk loads to the gallery model.
                 let results = thumb_loader.borrow_mut().poll_results();
                 if !results.is_empty() {
                     let gallery = gallery_clone.borrow();
                     for (item_id, img) in results {
                         gallery.update_thumbnail(item_id, img);
+                    }
+                }
+
+                // Determine visible rows and request load/generation for each item.
+                let Some(w) = window_weak3.upgrade() else { return };
+                let scroll_y = w.get_gallery_scroll_offset();
+                let viewport_h = w.get_gallery_viewport_height();
+                if viewport_h <= 0.0 {
+                    return;
+                }
+
+                let gallery = gallery_clone.borrow();
+                let visible = gallery.rows_in_view(scroll_y, viewport_h, SCROLL_BUFFER_ROWS);
+                for thumb in visible {
+                    if thumb.thumb_ready {
+                        if let Some(path) = &thumb.thumb_path {
+                            if let Some(img) = thumb_loader.borrow_mut().request(thumb.item_id, path) {
+                                gallery.update_thumbnail(thumb.item_id, img);
+                            }
+                        }
+                    } else if !gen_queued.contains(&thumb.item_id) {
+                        let _ = gen_tx.try_send(GenJob {
+                            item_id: thumb.item_id,
+                            path: thumb.path.clone(),
+                            mtime: thumb.mtime,
+                        });
+                        gen_queued.insert(thumb.item_id);
                     }
                 }
             },

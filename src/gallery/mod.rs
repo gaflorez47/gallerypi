@@ -7,13 +7,15 @@ use crate::db::Database;
 use crate::ui::{GalleryRowData, MonthEntry as SlintMonthEntry, ThumbnailData};
 use anyhow::Result;
 use month_model::MonthEntry;
-use row_types::GalleryRow;
+use row_types::{GalleryRow, GalleryThumb};
 use slint::{Model, ModelRc, VecModel};
 use std::collections::HashMap;
 use std::rc::Rc;
 
 pub struct GalleryController {
     rows: Vec<GalleryRow>,
+    /// Cumulative Y offset (px) of each row; mixed heights (header=48, image=thumb_size+4).
+    row_tops: Vec<f32>,
     month_entries: Vec<MonthEntry>,
     n_cols: usize,
     all_items: Vec<MediaItem>,
@@ -27,6 +29,7 @@ impl GalleryController {
     pub fn new(n_cols: usize) -> Self {
         Self {
             rows: Vec::new(),
+            row_tops: Vec::new(),
             month_entries: Vec::new(),
             n_cols,
             all_items: Vec::new(),
@@ -36,7 +39,7 @@ impl GalleryController {
     }
 
     /// Load all items from DB and rebuild the model.
-    pub fn reload(&mut self, db: &Database) -> Result<()> {
+    pub fn reload(&mut self, db: &Database, thumb_size: f32) -> Result<()> {
         self.all_items = queries::get_all_items_ordered(&db.conn)?;
         let (rows, month_data, positions) =
             model::build_rows(&self.all_items, self.n_cols);
@@ -49,6 +52,18 @@ impl GalleryController {
         tracing::info!("Gallery reload month entries {}", self.month_entries.len());
 
         self.item_positions = positions;
+
+        // Precompute cumulative row Y offsets for visibility queries.
+        let image_row_h = thumb_size + 4.0;
+        let mut y = 0.0f32;
+        self.row_tops = self.rows.iter().map(|r| {
+            let top = y;
+            y += match r {
+                GalleryRow::MonthHeader { .. } => 48.0,
+                GalleryRow::ImageRow { .. } => image_row_h,
+            };
+            top
+        }).collect();
 
         // Rebuild Slint model — set_vec replaces all rows at once
         let slint_rows: Vec<GalleryRowData> =
@@ -126,29 +141,36 @@ impl GalleryController {
         self.all_items.iter().find(|i| i.id == id)
     }
 
-    /// Enqueue thumbnail load requests for items that already have disk thumbnails.
-    /// Prioritizes the most recent items (top of gallery). Call after reload.
-    pub fn request_ready_thumbnails(
+    /// Returns item thumbs for rows that overlap [scroll_y, scroll_y + viewport_h],
+    /// expanded by `buffer` extra rows on each side.
+    pub fn rows_in_view(
         &self,
-        loader: &mut crate::thumbnail::ThumbnailLoader,
-        limit: usize,
-    ) {
-        let mut count = 0;
-        for item in &self.all_items {
-            if item.thumb_ready {
-                if let Some(ref path) = item.thumb_path {
-                    // Cache hit: image is returned immediately — apply it now.
-                    // Cache miss: load job is enqueued; result arrives via poll_results.
-                    if let Some(img) = loader.request(item.id, path) {
-                        self.update_thumbnail(item.id, img);
-                    }
-                    count += 1;
-                    if count >= limit {
-                        break;
-                    }
-                }
+        scroll_y: f32,
+        viewport_h: f32,
+        buffer_rows: usize,
+    ) -> Vec<&GalleryThumb> {
+        if self.row_tops.is_empty() {
+            return Vec::new();
+        }
+        let view_top = scroll_y;
+        let view_bot = scroll_y + viewport_h;
+
+        // Binary search for the first row whose bottom edge is >= view_top.
+        // row_tops[i] is the top of row i; its bottom is row_tops[i+1] (or end of content).
+        let first = self.row_tops
+            .partition_point(|&top| top < view_top)
+            .saturating_sub(buffer_rows + 1);
+        let last_exclusive = {
+            let past = self.row_tops.partition_point(|&top| top <= view_bot);
+            (past + buffer_rows).min(self.rows.len())
+        };
+
+        let mut out = Vec::new();
+        for row in &self.rows[first..last_exclusive] {
+            if let GalleryRow::ImageRow { items } = row {
+                out.extend(items.iter());
             }
         }
-        tracing::debug!("Enqueued {} thumbnail requests", count);
+        out
     }
 }

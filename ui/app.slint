@@ -22,6 +22,9 @@ export component AppWindow inherits Window {
     in-out property <length> thumb-size: 256px;
     // Set to a row index >= 0 to trigger an instant scroll in the gallery
     in-out property <int> gallery-scroll-to-row: -1;
+    // Read-back: scroll position and visible area height (in px), set by GalleryScreen
+    out property <float> gallery-scroll-offset: gallery-screen.scroll-offset;
+    out property <float> gallery-viewport-height: gallery-screen.viewport-height;
 
     callback item-tapped(int, string);       // item_id, media_type
     callback jump-to-month(int, int);        // year, month
@@ -48,7 +51,8 @@ export component AppWindow inherits Window {
 
 
 
-    if current-screen == Screen.Gallery: GalleryScreen {
+    gallery-screen := GalleryScreen {
+        visible: current-screen == Screen.Gallery;
         height: root.height;
         width: root.width;
         gallery-rows: root.gallery-rows;

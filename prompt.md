@@ -4,8 +4,8 @@ RUST_LOG=gallerypi=info ./target/debug/gallerypi
 
 
 ----------------------------
+- image tap broken
 - recycler view StandardListView with VecModel 
--- thumbnails only from whats visible on screen
 - Responsive layout
 - If no config file, file picker and save config
 
