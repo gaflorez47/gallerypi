@@ -8,7 +8,7 @@ use crate::ui::{AppWindow, Screen};
 use crate::video::VideoController;
 use crate::viewer::ViewerController;
 use anyhow::Result;
-use crossbeam_channel::{bounded, Receiver};
+use crossbeam_channel::bounded;
 use slint::{ComponentHandle, SharedPixelBuffer, Timer, TimerMode};
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -41,7 +41,10 @@ pub fn run(config: Config, db_path: PathBuf) -> Result<()> {
     let thumb_loader = Rc::new(RefCell::new(initial_loader));
 
     // --- Scanner ---
-    let scan_rx: Option<Receiver<ScanEvent>> = if config.performance.scan_on_startup {
+    let (scan_rx, gen_rx): (
+        Option<crossbeam_channel::Receiver<ScanEvent>>,
+        Option<crossbeam_channel::Receiver<(i64, String)>>,
+    ) = if config.performance.scan_on_startup {
         let (scan_tx, scan_rx) = bounded::<ScanEvent>(32);
         let media_dir = config.gallery.media_dir.clone();
         let db_path_scan = db_path.clone();
@@ -61,15 +64,16 @@ pub fn run(config: Config, db_path: PathBuf) -> Result<()> {
         // Start thumbnail generation after scan completes (with delay)
         let config_clone = config.clone();
         let db_path_gen = db_path.clone();
+        let (gen_tx, gen_rx) = crossbeam_channel::bounded::<(i64, String)>(256);
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_secs(5));
             crate::util::paths::ensure_thumb_dir().ok();
-            generator::run_generation(&config_clone, &db_path_gen);
+            generator::run_generation(&config_clone, &db_path_gen, gen_tx);
         });
 
-        Some(scan_rx)
+        (Some(scan_rx), Some(gen_rx))
     } else {
-        None
+        (None, None)
     };
 
     // Poll scan channel from main thread via Timer (avoids Rc<> crossing thread boundary)
@@ -283,6 +287,15 @@ pub fn run(config: Config, db_path: PathBuf) -> Result<()> {
             TimerMode::Repeated,
             std::time::Duration::from_millis(50),
             move || {
+                // Enqueue newly generated thumbnails into the loader
+                if let Some(ref rx) = gen_rx {
+                    let gallery = gallery_clone.borrow();
+                    while let Ok((id, path)) = rx.try_recv() {
+                        if let Some(img) = thumb_loader.borrow_mut().request(id, &path) {
+                            gallery.update_thumbnail(id, img);
+                        }
+                    }
+                }
                 let results = thumb_loader.borrow_mut().poll_results();
                 if !results.is_empty() {
                     let gallery = gallery_clone.borrow();

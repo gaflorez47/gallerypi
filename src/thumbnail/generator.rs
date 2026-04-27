@@ -51,7 +51,13 @@ pub fn generate_thumbnail(
 }
 
 /// Spawn background thumbnail generation for all images missing thumbnails.
-pub fn run_generation(config: &Config, db_path: &Path) {
+/// Sends `(item_id, thumb_path)` on `thumb_tx` for each successfully generated thumbnail
+/// so the main thread can request loading immediately.
+pub fn run_generation(
+    config: &Config,
+    db_path: &Path,
+    thumb_tx: crossbeam_channel::Sender<(i64, String)>,
+) {
     let thumb_dir = crate::config::thumb_dir();
     let thumb_size = config.gallery.thumbnail_size;
     let n_threads = config.performance.thumb_gen_threads;
@@ -117,9 +123,11 @@ pub fn run_generation(config: &Config, db_path: &Path) {
                 match generate_thumbnail(source_path, mtime, &thumb_dir, thumb_size) {
                     Ok(thumb_path) => {
                         if let Ok(conn) = rusqlite::Connection::open(&db_path) {
-                            let thumb_str = thumb_path.to_string_lossy();
+                            let thumb_str = thumb_path.to_string_lossy().into_owned();
                             if let Err(e) = queries::mark_thumb_ready(&conn, *id, &thumb_str) {
                                 tracing::warn!("Failed to mark thumb ready for id {}: {}", id, e);
+                            } else {
+                                let _ = thumb_tx.send((*id, thumb_str));
                             }
                         }
                     }

@@ -4,9 +4,9 @@ RUST_LOG=gallerypi=info ./target/debug/gallerypi
 
 
 ----------------------------
-- Responsive layout
-- screenshot tests
 - recycler view StandardListView with VecModel 
+-- thumbnails only from whats visible on screen
+- Responsive layout
 - If no config file, file picker and save config
 
 

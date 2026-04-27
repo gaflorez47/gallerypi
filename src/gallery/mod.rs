@@ -137,7 +137,11 @@ impl GalleryController {
         for item in &self.all_items {
             if item.thumb_ready {
                 if let Some(ref path) = item.thumb_path {
-                    loader.request(item.id, path);
+                    // Cache hit: image is returned immediately — apply it now.
+                    // Cache miss: load job is enqueued; result arrives via poll_results.
+                    if let Some(img) = loader.request(item.id, path) {
+                        self.update_thumbnail(item.id, img);
+                    }
                     count += 1;
                     if count >= limit {
                         break;
