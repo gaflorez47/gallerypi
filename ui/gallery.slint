@@ -5,7 +5,7 @@ import { ThumbnailCell } from "thumbnail_cell.slint";
 
 component MonthHeaderRow {
     in property <string> label;
-    
+
     Rectangle {
         Text {
             x: 16px;
@@ -22,12 +22,12 @@ component MonthHeaderRow {
 component ImageRow {
     in property <[ThumbnailData]> items;
     in property <int> item-count;
-    in property <length> thumb-size;
+    in property <length> cell-size;
     callback item-tapped(int, string);
 
-    height: thumb-size + 4px;
+    height: cell-size + 4px;
     HorizontalLayout {
-        height: 200px;
+        alignment: start;
         spacing: 2px;
         padding: 2px;
         for item[i] in items: ThumbnailCell {
@@ -36,7 +36,7 @@ component ImageRow {
             thumb-image: item.thumb-image;
             thumb-ready: item.thumb-ready;
             media-type: item.media-type;
-            size: thumb-size;
+            size: cell-size;
             tapped(id, mt) => { item-tapped(id, mt); }
         }
     }
@@ -44,10 +44,16 @@ component ImageRow {
 
 component GalleryRowDelegate {
     in property <GalleryRowData> row-data;
+    in property <int> n-cols;
     in property <length> thumb-size;
     callback item-tapped(int, string);
 
-    height: row-data.is-header ? 48px : (thumb-size + 4px);
+    // Fill available width evenly, capped at thumb-size
+    private property <length> cell-size: min(
+        thumb-size,
+        (self.width - 4px - max(0, n-cols - 1) * 2px) / max(1, n-cols)
+    );
+    height: row-data.is-header ? 48px : (cell-size + 4px);
 
     if row-data.is-header: MonthHeaderRow {
         label: row-data.header-label;
@@ -55,7 +61,7 @@ component GalleryRowDelegate {
     if !row-data.is-header: ImageRow {
         items: row-data.items;
         item-count: row-data.item-count;
-        thumb-size: thumb-size;
+        cell-size: cell-size;
         item-tapped(id, mt) => { item-tapped(id, mt); }
     }
 }
@@ -72,13 +78,16 @@ export component GalleryScreen {
     callback jump-to-month(int, int);
     callback reminisce-tapped();
 
-    // Current scroll position (pixels scrolled down) and visible area height — read by Rust.
+    // Read by Rust: scroll position, visible area height, and list view width.
     out property <float> scroll-offset: -list-view.viewport-y / 1px;
     out property <float> viewport-height: list-view.height / 1px;
+    out property <float> list-view-width: list-view.width / 1px;
 
-    // Compute the row height: header rows are 48px, image rows are thumb-size + 4px.
-    // We use thumb-size + 4px as an approximation for uniform-row scrolling.
-    private property <length> row-height: thumb-size + 4px;
+    // Dynamic row height based on actual list-view width (matches GalleryRowDelegate formula).
+    private property <length> row-height: min(
+        thumb-size,
+        (list-view.width - 4px - max(0, grid-columns - 1) * 2px) / max(1, grid-columns)
+    ) + 4px;
 
     // Scroll instantly when scroll-to-row changes (no animation)
     changed scroll-to-row => {
@@ -88,7 +97,6 @@ export component GalleryScreen {
     }
 
     VerticalLayout {
-        width: parent.width;
         // Toolbar
         Rectangle {
             height: 52px;
@@ -116,12 +124,14 @@ export component GalleryScreen {
             }
         }
 
-        // Main content: grid + month scroller
+        // Main content: grid + month scroller — vertical-stretch fills remaining height
         HorizontalLayout {
+            //vertical-stretch: 1;
             // Gallery list view (main area)
             list-view := ListView {
                 for row in gallery-rows: GalleryRowDelegate {
                     row-data: row;
+                    n-cols: root.grid-columns;
                     thumb-size: root.thumb-size;
                     item-tapped(id, mt) => { root.item-tapped(id, mt); }
                 }

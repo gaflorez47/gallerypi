@@ -2,11 +2,20 @@ export DISPLAY=localhost:0
 cargo build
 RUST_LOG=gallerypi=info ./target/debug/gallerypi
 
+cargo build && RUST_LOG=gallerypi=info ./target/debug/gallerypi
+
+
+/plan Propose a plan to address the following items
+
+Bug
+- image tap broken, and doesn't open the image viewer
+
+Improvements
+- Gallery needs the use of recycler view via StandardListView with VecModel 
+- Responsive layout. Currently the images in the grid overflow, when resizing the window, the grid/app doesn't use the whole vertical space
+- Currently the app only scans a single folder, we need to change it so that it recursively scans nested folders, however this needs to use throttling/batching
 
 ----------------------------
-- image tap broken
-- recycler view StandardListView with VecModel 
-- Responsive layout
 - If no config file, file picker and save config
 
 

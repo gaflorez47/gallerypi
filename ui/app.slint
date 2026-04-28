@@ -11,6 +11,7 @@ export component AppWindow inherits Window {
     title: "GalleryPi";
     background: #111111;
 
+
     // Screen routing
     in-out property <Screen> current-screen: Screen.Gallery;
 
@@ -22,9 +23,10 @@ export component AppWindow inherits Window {
     in-out property <length> thumb-size: 256px;
     // Set to a row index >= 0 to trigger an instant scroll in the gallery
     in-out property <int> gallery-scroll-to-row: -1;
-    // Read-back: scroll position and visible area height (in px), set by GalleryScreen
+    // Read-back: scroll position, visible area height, and list-view width (in px)
     out property <float> gallery-scroll-offset: gallery-screen.scroll-offset;
     out property <float> gallery-viewport-height: gallery-screen.viewport-height;
+    out property <float> gallery-list-view-width: gallery-screen.list-view-width;
 
     callback item-tapped(int, string);       // item_id, media_type
     callback jump-to-month(int, int);        // year, month
@@ -50,7 +52,6 @@ export component AppWindow inherits Window {
 
 
 
-
     gallery-screen := GalleryScreen {
         visible: current-screen == Screen.Gallery;
         height: root.height;
@@ -66,7 +67,7 @@ export component AppWindow inherits Window {
     }
 
     if current-screen == Screen.Viewer: ViewerScreen {
-    height: root.height;
+        height: root.height;
         width: root.width;
         viewer-image: root.viewer-image;
         loading: root.viewer-loading;
@@ -76,7 +77,7 @@ export component AppWindow inherits Window {
     }
 
     if current-screen == Screen.Video: VideoPlayer {
-    height: root.height;
+        height: root.height;
         width: root.width;
         video-frame: root.video-frame;
         position: root.video-position;
@@ -88,4 +89,6 @@ export component AppWindow inherits Window {
         seek(p) => { root.video-seek(p); }
         volume-changed(v) => { root.video-volume-changed(v); }
     }
+
+
 }

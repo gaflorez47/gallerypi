@@ -14,8 +14,10 @@ use std::rc::Rc;
 
 pub struct GalleryController {
     rows: Vec<GalleryRow>,
-    /// Cumulative Y offset (px) of each row; mixed heights (header=48, image=thumb_size+4).
+    /// Cumulative Y offset (px) of each row; mixed heights (header=48, image=cell_size+4).
     row_tops: Vec<f32>,
+    /// Last list-view width used for row_tops computation; -1 forces first recompute.
+    last_lv_width: f32,
     month_entries: Vec<MonthEntry>,
     n_cols: usize,
     all_items: Vec<MediaItem>,
@@ -30,6 +32,7 @@ impl GalleryController {
         Self {
             rows: Vec::new(),
             row_tops: Vec::new(),
+            last_lv_width: -1.0,
             month_entries: Vec::new(),
             n_cols,
             all_items: Vec::new(),
@@ -82,6 +85,49 @@ impl GalleryController {
         let slint_months: Vec<SlintMonthEntry> =
             self.month_entries.iter().map(month_model::to_slint).collect();
         ModelRc::new(VecModel::from(slint_months))
+    }
+
+    /// Recompute row_tops using the actual ListView width.
+    /// Only recomputes when lv_width changes by more than 1px.
+    pub fn ensure_row_tops(&mut self, lv_width: f32, thumb_size: f32) {
+        if (lv_width - self.last_lv_width).abs() < 1.0 {
+            return;
+        }
+        self.last_lv_width = lv_width;
+        let cell_size = ((lv_width - 4.0 - (self.n_cols.saturating_sub(1)) as f32 * 2.0)
+            / self.n_cols.max(1) as f32)
+            .min(thumb_size);
+        let image_row_h = cell_size + 4.0;
+        let mut y = 0.0f32;
+        self.row_tops = self.rows.iter().map(|r| {
+            let top = y;
+            y += match r {
+                GalleryRow::MonthHeader { .. } => 48.0,
+                GalleryRow::ImageRow { .. } => image_row_h,
+            };
+            top
+        }).collect();
+    }
+
+    /// Clear a single thumbnail cell in the live model (eviction).
+    pub fn clear_thumbnail(&self, item_id: i64) {
+        let Some(&(row_idx, col_idx)) = self.item_positions.get(&item_id) else {
+            return;
+        };
+        let Some(mut row) = self.row_model.row_data(row_idx) else {
+            return;
+        };
+        let items_count = row.item_count as usize;
+        let old_items = row.items.clone();
+        let mut new_items: Vec<ThumbnailData> = (0..items_count)
+            .map(|i| old_items.row_data(i).unwrap_or_default())
+            .collect();
+        if col_idx < new_items.len() && new_items[col_idx].thumb_ready {
+            new_items[col_idx].thumb_image = Default::default();
+            new_items[col_idx].thumb_ready = false;
+            row.items = ModelRc::new(VecModel::from(new_items));
+            self.row_model.set_row_data(row_idx, row);
+        }
     }
 
     /// Update a single thumbnail cell in the live model.

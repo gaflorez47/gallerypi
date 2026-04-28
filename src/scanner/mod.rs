@@ -7,9 +7,12 @@ use chrono::{Datelike, TimeZone, Utc};
 use crossbeam_channel::Sender;
 use std::path::PathBuf;
 
+const BATCH_SIZE: usize = 50;
+
 #[derive(Debug)]
 pub enum ScanEvent {
     Progress { scanned: usize, total_estimate: usize },
+    BatchComplete { new_items: usize },
     Complete { total: usize },
     Error(String),
 }
@@ -81,7 +84,9 @@ impl Scanner {
 
             new_items += 1;
 
-            if count % 100 == 0 {
+            if new_items % BATCH_SIZE == 0 {
+                let _ = self.progress_tx.try_send(ScanEvent::BatchComplete { new_items });
+            } else if count % 100 == 0 {
                 let _ = self.progress_tx.try_send(ScanEvent::Progress {
                     scanned: count,
                     total_estimate: count + 100,
