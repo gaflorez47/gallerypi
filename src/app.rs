@@ -26,7 +26,10 @@ pub fn run(config: Config, db_path: PathBuf) -> Result<()> {
 
     let n_cols = config.gallery.grid_columns as usize;
     let mut gallery_ctrl = GalleryController::new(n_cols);
-    gallery_ctrl.reload(&db.borrow(), thumb_size)?;
+    // Only pre-load gallery from DB when not scanning; if scanning we wait for Complete.
+    if !config.performance.scan_on_startup {
+        gallery_ctrl.reload(&db.borrow(), thumb_size)?;
+    }
 
     let thumb_loader = Rc::new(RefCell::new(ThumbnailLoader::new(
         config.performance.thumb_cache_entries,
@@ -45,6 +48,10 @@ pub fn run(config: Config, db_path: PathBuf) -> Result<()> {
 
     if config.ui.fullscreen {
         window.window().set_fullscreen(true);
+    }
+
+    if config.performance.scan_on_startup {
+        window.set_current_screen(Screen::Scanning);
     }
 
     let gallery_ctrl = Rc::new(RefCell::new(gallery_ctrl));
@@ -87,20 +94,14 @@ pub fn run(config: Config, db_path: PathBuf) -> Result<()> {
             move || {
                 while let Ok(event) = rx.try_recv() {
                     match event {
-                        ScanEvent::BatchComplete { new_items } => {
-                            tracing::debug!("Scan batch: {} new items so far, reloading gallery", new_items);
+                        ScanEvent::Progress { scanned, .. } => {
+                            tracing::debug!("Scan: {} files", scanned);
                             if let Some(w) = window_weak.upgrade() {
-                                let mut gallery = gallery_clone.borrow_mut();
-                                if let Err(e) = gallery.reload(&db_clone.borrow(), thumb_size) {
-                                    tracing::error!("Gallery reload: {}", e);
-                                    return;
-                                }
-                                w.set_gallery_rows(gallery.row_model_rc());
-                                w.set_month_entries(gallery.build_month_model());
+                                w.set_scan_file_count(scanned as i32);
                             }
                         }
                         ScanEvent::Complete { total } => {
-                            tracing::info!("Scan complete ({} files), reloading", total);
+                            tracing::info!("Scan complete ({} files), loading gallery", total);
                             if let Some(w) = window_weak.upgrade() {
                                 let mut gallery = gallery_clone.borrow_mut();
                                 if let Err(e) = gallery.reload(&db_clone.borrow(), thumb_size) {
@@ -109,12 +110,10 @@ pub fn run(config: Config, db_path: PathBuf) -> Result<()> {
                                 }
                                 w.set_gallery_rows(gallery.row_model_rc());
                                 w.set_month_entries(gallery.build_month_model());
+                                w.set_current_screen(Screen::Gallery);
                             }
                         }
                         ScanEvent::Error(e) => tracing::error!("Scan error: {}", e),
-                        ScanEvent::Progress { scanned, .. } => {
-                            tracing::debug!("Scan: {} files", scanned);
-                        }
                     }
                 }
             },
@@ -269,6 +268,9 @@ pub fn run(config: Config, db_path: PathBuf) -> Result<()> {
     {
         let video_clone = video_ctrl.clone();
         let window_weak2 = window.as_weak();
+        let mut vid_last_pos: f32 = -1.0;
+        let mut vid_last_dur: f32 = -1.0;
+        let mut vid_last_playing: bool = false;
         video_timer.start(
             TimerMode::Repeated,
             std::time::Duration::from_millis(250),
@@ -282,9 +284,24 @@ pub fn run(config: Config, db_path: PathBuf) -> Result<()> {
                             return;
                         }
                         vc.poll_state();
-                        w.set_video_position(vc.get_position() as f32);
-                        w.set_video_duration(vc.get_duration() as f32);
-                        w.set_video_playing(vc.is_playing());
+                        let pos = vc.get_position() as f32;
+                        let dur = vc.get_duration() as f32;
+                        let playing = vc.is_playing();
+                        if (pos - vid_last_pos).abs() > 0.001 {
+                            tracing::trace!("[video_timer] pos {:.2} -> {:.2}", vid_last_pos, pos);
+                            vid_last_pos = pos;
+                        }
+                        if (dur - vid_last_dur).abs() > 0.001 {
+                            tracing::trace!("[video_timer] dur {:.2} -> {:.2}", vid_last_dur, dur);
+                            vid_last_dur = dur;
+                        }
+                        if playing != vid_last_playing {
+                            tracing::trace!("[video_timer] playing {} -> {}", vid_last_playing, playing);
+                            vid_last_playing = playing;
+                        }
+                        w.set_video_position(pos);
+                        w.set_video_duration(dur);
+                        w.set_video_playing(playing);
                     }
                 }
             },
@@ -300,9 +317,12 @@ pub fn run(config: Config, db_path: PathBuf) -> Result<()> {
         let window_weak3 = window.as_weak();
         let mut gen_queued: HashSet<i64> = HashSet::new();
         let mut loaded_items: HashSet<i64> = HashSet::new();
+        let mut stats_tick: u32 = 0;
+        let mut stats_thumb_updates: u32 = 0;
+        let mut stats_row_clears: u32 = 0;
         thumb_timer.start(
             TimerMode::Repeated,
-            std::time::Duration::from_millis(50),
+            std::time::Duration::from_millis(1000),
             move || {
                 // Deliver newly generated thumbnails → enqueue disk load.
                 while let Ok((id, path)) = gen_rx.try_recv() {
@@ -310,6 +330,7 @@ pub fn run(config: Config, db_path: PathBuf) -> Result<()> {
                     if let Some(img) = img {
                         gallery_clone.borrow().update_thumbnail(id, img);
                         loaded_items.insert(id);
+                        stats_thumb_updates += 1;
                     }
                     // else: load job enqueued; arrives via poll_results below
                 }
@@ -321,6 +342,7 @@ pub fn run(config: Config, db_path: PathBuf) -> Result<()> {
                     for (item_id, img) in results {
                         gallery.update_thumbnail(item_id, img);
                         loaded_items.insert(item_id);
+                        stats_thumb_updates += 1;
                     }
                 }
 
@@ -353,15 +375,20 @@ pub fn run(config: Config, db_path: PathBuf) -> Result<()> {
                         loaded_items.remove(&id);
                         gen_queued.remove(&id);
                         gallery.clear_thumbnail(id);
+                        stats_row_clears += 1;
                     }
                 }
 
                 for thumb in visible {
+                    if loaded_items.contains(&thumb.item_id) {
+                        continue; // already in VecModel, nothing to do
+                    }
                     if thumb.thumb_ready {
                         if let Some(path) = &thumb.thumb_path {
                             if let Some(img) = thumb_loader.borrow_mut().request(thumb.item_id, path) {
                                 gallery.update_thumbnail(thumb.item_id, img);
                                 loaded_items.insert(thumb.item_id);
+                                stats_thumb_updates += 1;
                             }
                         }
                     } else if !gen_queued.contains(&thumb.item_id) {
@@ -372,6 +399,18 @@ pub fn run(config: Config, db_path: PathBuf) -> Result<()> {
                         });
                         gen_queued.insert(thumb.item_id);
                     }
+                }
+
+                // Log per-second summary every 20 ticks (~1s at 50ms).
+                stats_tick += 1;
+                if stats_tick >= 20 {
+                    tracing::debug!(
+                        "[thumb_timer/s] thumb_updates={} row_clears={} loaded={}",
+                        stats_thumb_updates, stats_row_clears, loaded_items.len()
+                    );
+                    stats_tick = 0;
+                    stats_thumb_updates = 0;
+                    stats_row_clears = 0;
                 }
             },
         );

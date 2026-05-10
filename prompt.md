@@ -4,10 +4,14 @@ RUST_LOG=gallerypi=info ./target/debug/gallerypi
 
 cargo build && RUST_LOG=gallerypi=info ./target/debug/gallerypi
 
+- If no config file, file picker and save config
+
+----------------------------
 
 /plan Propose a plan to address the following items
 
 Bug
+- thumb_timer is doing too much, every tick it forces redraws
 - image tap broken, and doesn't open the image viewer
 
 Improvements
@@ -15,8 +19,6 @@ Improvements
 - Responsive layout. Currently the images in the grid overflow, when resizing the window, the grid/app doesn't use the whole vertical space
 - Currently the app only scans a single folder, we need to change it so that it recursively scans nested folders, however this needs to use throttling/batching
 
-----------------------------
-- If no config file, file picker and save config
 
 
 

@@ -5,7 +5,7 @@ import { MonthEntry, GalleryRowData, ThumbnailData, ViewerItem } from "types.sli
 
 export { MonthEntry, GalleryRowData, ThumbnailData, ViewerItem }
 
-export enum Screen { Gallery, Viewer, Video }
+export enum Screen { Scanning, Gallery, Viewer, Video }
 
 export component AppWindow inherits Window {
     title: "GalleryPi";
@@ -14,6 +14,8 @@ export component AppWindow inherits Window {
 
     // Screen routing
     in-out property <Screen> current-screen: Screen.Gallery;
+    // Scan progress (number of files checked so far)
+    in property <int> scan-file-count: 0;
 
     // Gallery data (wired from Rust)
     in property <[GalleryRowData]> gallery-rows;
@@ -51,6 +53,21 @@ export component AppWindow inherits Window {
     callback video-volume-changed(float);
 
 
+
+    if current-screen == Screen.Scanning: Rectangle {
+        height: root.height;
+        width: root.width;
+        background: #111111;
+        Text {
+            color: #cccccc;
+            font-size: 18px;
+            text: root.scan-file-count == 0
+                ? "Scanning media..."
+                : "Scanning media... (" + root.scan-file-count + " files)";
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
 
     gallery-screen := GalleryScreen {
         visible: current-screen == Screen.Gallery;

@@ -114,6 +114,7 @@ impl GalleryController {
         let Some(&(row_idx, col_idx)) = self.item_positions.get(&item_id) else {
             return;
         };
+        tracing::trace!("clear_thumbnail: item_id={} row={} col={}", item_id, row_idx, col_idx);
         let Some(mut row) = self.row_model.row_data(row_idx) else {
             return;
         };
@@ -135,6 +136,7 @@ impl GalleryController {
         let Some(&(row_idx, col_idx)) = self.item_positions.get(&item_id) else {
             return;
         };
+        tracing::trace!("update_thumbnail: item_id={} row={} col={}", item_id, row_idx, col_idx);
         let Some(mut row) = self.row_model.row_data(row_idx) else {
             return;
         };
@@ -211,12 +213,25 @@ impl GalleryController {
             (past + buffer_rows).min(self.rows.len())
         };
 
+        tracing::debug!(
+            "rows_in_view: scroll_y={:.1} viewport_h={:.1} view_top={:.1} view_bot={:.1} \
+             first={} last_exclusive={} total_rows={}",
+            scroll_y, viewport_h, view_top, view_bot, first, last_exclusive, self.rows.len()
+        );
+
         let mut out = Vec::new();
-        for row in &self.rows[first..last_exclusive] {
-            if let GalleryRow::ImageRow { items } = row {
-                out.extend(items.iter());
+        for (i, row) in self.rows[first..last_exclusive].iter().enumerate() {
+            match row {
+                GalleryRow::ImageRow { items } => {
+                    tracing::debug!("  row[{}] ImageRow: {} items", first + i, items.len());
+                    out.extend(items.iter());
+                }
+                GalleryRow::MonthHeader { .. } => {
+                    tracing::debug!("  row[{}] MonthHeader (skipped)", first + i);
+                }
             }
         }
+        tracing::debug!("rows_in_view -> {} thumbs", out.len());
         out
     }
 }

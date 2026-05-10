@@ -45,6 +45,9 @@ export component ThumbnailCell {
         }
 
         TouchArea {
+         clicked => {
+                debug("ThumbnailCell clicked!!");
+            }
             pointer-event(e) => {
                 if e.kind == PointerEventKind.down {
                     TapTracker.armed-id = item-id;

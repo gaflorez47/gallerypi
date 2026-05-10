@@ -1,5 +1,6 @@
 use anyhow::Result;
 use rusqlite::{params, Connection};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct MediaItem {
@@ -125,6 +126,25 @@ pub fn get_items_needing_thumbnails(conn: &Connection) -> Result<Vec<(i64, Strin
         .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(items)
+}
+
+pub fn get_all_dir_mtimes(conn: &Connection) -> Result<HashMap<String, i64>> {
+    let mut stmt = conn.prepare("SELECT path, dir_mtime FROM scanned_dirs")?;
+    let entries = stmt
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(entries.into_iter().collect())
+}
+
+pub fn update_dir_mtimes(conn: &Connection, entries: &[(String, i64)]) -> Result<()> {
+    let mut stmt = conn.prepare(
+        "INSERT INTO scanned_dirs (path, dir_mtime) VALUES (?1, ?2)
+         ON CONFLICT(path) DO UPDATE SET dir_mtime = excluded.dir_mtime",
+    )?;
+    for (path, mtime) in entries {
+        stmt.execute(params![path, mtime])?;
+    }
+    Ok(())
 }
 
 fn row_to_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<MediaItem> {

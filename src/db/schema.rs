@@ -18,7 +18,11 @@ pub fn initialize(conn: &Connection) -> Result<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_date  ON media_items(year DESC, month DESC, media_date DESC);
         CREATE INDEX IF NOT EXISTS idx_thumb ON media_items(thumb_ready);
-        CREATE INDEX IF NOT EXISTS idx_path  ON media_items(path);",
+        CREATE INDEX IF NOT EXISTS idx_path  ON media_items(path);
+        CREATE TABLE IF NOT EXISTS scanned_dirs (
+            path      TEXT PRIMARY KEY,
+            dir_mtime INTEGER NOT NULL
+        );",
     )?;
     Ok(())
 }

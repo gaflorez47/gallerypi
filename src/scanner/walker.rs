@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
@@ -11,9 +12,24 @@ pub struct MediaFile {
 
 /// Walk `dir` and yield all supported media files.
 pub fn walk_media(dir: &Path) -> impl Iterator<Item = MediaFile> {
+    walk_media_filtered(dir, HashSet::new())
+}
+
+/// Walk `dir`, skipping any directory (and its subtree) whose path is in `skip_dirs`.
+pub fn walk_media_filtered(
+    dir: &Path,
+    skip_dirs: HashSet<PathBuf>,
+) -> impl Iterator<Item = MediaFile> {
     WalkDir::new(dir)
         .follow_links(false)
         .into_iter()
+        .filter_entry(move |e| {
+            if e.file_type().is_dir() {
+                !skip_dirs.contains(e.path())
+            } else {
+                true
+            }
+        })
         .filter_map(|entry| entry.ok())
         .filter(|e| e.file_type().is_file())
         .filter_map(|e| {
