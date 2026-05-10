@@ -89,6 +89,15 @@ export component GalleryScreen {
         (list-view.width - 4px - max(0, grid-columns - 1) * 2px) / max(1, grid-columns)
     ) + 4px;
 
+    // Fast-scroller state
+    private property <int> scroll-tick-counter: 0;
+    private property <float> scroller-fraction:
+        scroll-offset / max(1.0, gallery-rows.length * (row-height / 1px) - list-view.height / 1px);
+
+    changed scroll-offset => {
+        scroll-tick-counter = scroll-tick-counter + 1;
+    }
+
     // Scroll instantly when scroll-to-row changes (no animation)
     changed scroll-to-row => {
         if scroll-to-row >= 0 {
@@ -124,10 +133,9 @@ export component GalleryScreen {
             }
         }
 
-        // Main content: grid + month scroller — vertical-stretch fills remaining height
-        HorizontalLayout {
-            //vertical-stretch: 1;
-            // Gallery list view (main area)
+        // Main content: gallery list + floating month scroller overlay
+        Rectangle {
+            // Gallery list view (full width)
             list-view := ListView {
                 for row in gallery-rows: GalleryRowDelegate {
                     row-data: row;
@@ -137,10 +145,14 @@ export component GalleryScreen {
                 }
             }
 
-            // Month scroller sidebar
+            // Month fast scroller (floating overlay on right edge)
             MonthScroller {
-                width: 50px;
+                x: parent.width - self.width;
+                y: 0px;
+                height: parent.height;
                 month-entries: root.month-entries;
+                scroll-fraction: scroller-fraction;
+                scroll-tick: scroll-tick-counter;
                 jump-to-month(y, m) => { root.jump-to-month(y, m); }
             }
         }

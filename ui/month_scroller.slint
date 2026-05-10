@@ -1,41 +1,131 @@
-import { ListView } from "std-widgets.slint";
 import { MonthEntry } from "types.slint";
-
-component MonthEntryItem {
-    in property <string> label;
-    in property <bool> selected;
-    callback tapped();
-
-    height: 36px;
-    Rectangle {
-        background: selected ? #3a5a8a : transparent;
-        border-radius: 4px;
-        TouchArea {
-            clicked => { tapped(); }
-        }
-        Text {
-            text: label;
-            color: selected ? white : #aaaaaa;
-            font-size: 12px;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-        }
-    }
-}
 
 export component MonthScroller {
     in property <[MonthEntry]> month-entries;
-    in-out property <int> selected-year;
-    in-out property <int> selected-month;
+    in property <float> scroll-fraction;    // 0..1 current scroll position
+    in property <int> scroll-tick;          // pulses on every scroll event
     callback jump-to-month(int, int);
 
+    private property <bool> show-scroller: false;
+    private property <bool> is-dragging: false;
+    private property <float> drag-fraction: 0.0;
+    private property <int> drag-target-idx: 0;
+
+    private property <length> thumb-size: 44px;
+    private property <length> label-width: 96px;
+
+    private property <float> display-fraction: is-dragging ? drag-fraction : scroll-fraction;
+    private property <length> thumb-y: clamp(
+        display-fraction * (root.height - thumb-size),
+        0px,
+        root.height - thumb-size
+    );
+
+    // Show on scroll
+    changed scroll-tick => {
+        show-scroller = true;
+        hide-timer.running = false;
+        hide-timer.running = true;
+    }
+
+    hide-timer := Timer {
+        interval: 2000ms;
+        triggered => {
+            if !is-dragging {
+                show-scroller = false;
+            }
+            hide-timer.running = false;
+        }
+    }
+
+    // Component width: label + gap + thumb, transparent background
+    width: label-width + 8px + thumb-size;
+
+    // Full-height drag zone on the right column
+    TouchArea {
+        x: root.width - thumb-size;
+        y: 0;
+        width: thumb-size;
+        height: root.height;
+
+        pointer-event(e) => {
+            if e.kind == PointerEventKind.down {
+                is-dragging = true;
+                show-scroller = true;
+                hide-timer.running = false;
+                drag-fraction = clamp(self.mouse-y / self.height, 0.0, 1.0);
+                drag-target-idx = clamp(
+                    round(drag-fraction * max(0, month-entries.length - 1)),
+                    0,
+                    max(0, month-entries.length - 1)
+                );
+            } else if e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel {
+                is-dragging = false;
+                if month-entries.length > 0 {
+                    jump-to-month(
+                        month-entries[drag-target-idx].year,
+                        month-entries[drag-target-idx].month
+                    );
+                }
+                hide-timer.running = false;
+                hide-timer.running = true;
+            }
+        }
+        moved => {
+            if is-dragging {
+                drag-fraction = clamp(self.mouse-y / self.height, 0.0, 1.0);
+                drag-target-idx = clamp(
+                    round(drag-fraction * max(0, month-entries.length - 1)),
+                    0,
+                    max(0, month-entries.length - 1)
+                );
+            }
+        }
+    }
+
+    // Thumb circle
     Rectangle {
-        background: #161616;
-        ListView {
-            for entry in month-entries: MonthEntryItem {
-                label: entry.label;
-                selected: entry.year == selected-year && entry.month == selected-month;
-                tapped() => { jump-to-month(entry.year, entry.month); }
+        x: root.width - thumb-size;
+        y: thumb-y;
+        width: thumb-size;
+        height: thumb-size;
+        opacity: (show-scroller || is-dragging) && month-entries.length >= 2 ? 1.0 : 0.0;
+        animate opacity { duration: 300ms; }
+
+        Rectangle {
+            border-radius: thumb-size / 2;
+            background: #3a5a8a;
+            drop-shadow-blur: 4px;
+            drop-shadow-color: #00000066;
+            drop-shadow-offset-y: 2px;
+
+            Text {
+                text: "≡";
+                color: white;
+                font-size: 18px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+    }
+
+    // Label bubble (only while dragging)
+    if is-dragging && month-entries.length > 0: Rectangle {
+        x: 0px;
+        y: thumb-y;
+        width: label-width;
+        height: thumb-size;
+
+        Rectangle {
+            border-radius: 6px;
+            background: #2a2a2a;
+
+            Text {
+                text: month-entries[drag-target-idx].label;
+                color: white;
+                font-size: 13px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
             }
         }
     }
