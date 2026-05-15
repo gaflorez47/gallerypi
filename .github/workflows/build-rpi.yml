@@ -5,13 +5,13 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm  # native arm64 runner — no cross-compilation needed
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust aarch64 target
-        run: rustup target add aarch64-unknown-linux-gnu
+      - name: Install Rust
+        run: rustup show  # activates toolchain from rust-toolchain.toml if present, else stable
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -20,40 +20,26 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-aarch64-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-arm64-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-aarch64-
+            ${{ runner.os }}-arm64-
 
-      - name: Install aarch64 cross-compilation dependencies
+      - name: Install dependencies
         run: |
-          sudo dpkg --add-architecture arm64
           sudo apt-get update
           sudo apt-get install -y \
-            gcc-aarch64-linux-gnu \
-            libfontconfig1-dev:arm64 \
-            libfreetype-dev:arm64 \
-            libwayland-dev:arm64 \
-            libxkbcommon-dev:arm64 \
-            libmpv-dev:arm64
-
-      - name: Configure cargo for aarch64
-        run: |
-          mkdir -p ~/.cargo
-          cat >> ~/.cargo/config.toml << 'EOF'
-          [target.aarch64-unknown-linux-gnu]
-          linker = "aarch64-linux-gnu-gcc"
-          EOF
+            libfontconfig1-dev \
+            libfreetype-dev \
+            libwayland-dev \
+            libxkbcommon-dev \
+            libmpv-dev
 
       - name: Build
-        env:
-          PKG_CONFIG_ALLOW_CROSS: "1"
-          PKG_CONFIG_SYSROOT_DIR: /usr/aarch64-linux-gnu
-          PKG_CONFIG_PATH: /usr/lib/aarch64-linux-gnu/pkgconfig
-        run: cargo build --target aarch64-unknown-linux-gnu --release
+        run: cargo build --release
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
           name: gallerypi-aarch64
-          path: target/aarch64-unknown-linux-gnu/release/gallerypi
+          path: target/release/gallerypi
           retention-days: 14
