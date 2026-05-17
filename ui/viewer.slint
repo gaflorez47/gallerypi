@@ -13,6 +13,9 @@ export component ViewerScreen {
     private property <length> drag-start-offset-x;
     private property <length> drag-start-offset-y;
     private property <length> swipe-start-x;
+    private property <duration> swipe-start-time;
+    private property <float> swipe-dx-px;
+    private property <float> swipe-velocity;
     private property <bool> is-dragging: false;
 
     Rectangle {
@@ -45,29 +48,35 @@ export component ViewerScreen {
                 if e.kind == PointerEventKind.down {
                     is-dragging = true;
                     swipe-start-x = self.mouse-x;
+                    swipe-start-time = animation-tick();
                     drag-start-x = self.mouse-x;
                     drag-start-y = self.mouse-y;
                     drag-start-offset-x = offset-x;
                     drag-start-offset-y = offset-y;
                 } else if e.kind == PointerEventKind.up {
                     is-dragging = false;
+                    swipe-dx-px = (self.mouse-x - swipe-start-x) / 1px;
+                    swipe-velocity = abs(swipe-dx-px) / max(1.0, (animation-tick() - swipe-start-time) / 1ms);
+                    offset-x = 0px;
+                    offset-y = 0px;
                     if scale <= 1.05 {
-                        if self.mouse-x - swipe-start-x > parent.width * 0.3 {
+                        if swipe-dx-px > parent.width / 1px * 0.1 || (swipe-dx-px > parent.width / 1px * 0.03 && swipe-velocity > 0.5) {
                             swipe-right();
-                            offset-x = 0px;
-                            offset-y = 0px;
-                        } else if swipe-start-x - self.mouse-x > parent.width * 0.3 {
+                        } else if -swipe-dx-px > parent.width / 1px * 0.1 || (-swipe-dx-px > parent.width / 1px * 0.03 && swipe-velocity > 0.5) {
                             swipe-left();
-                            offset-x = 0px;
-                            offset-y = 0px;
                         }
                     }
                 }
             }
             moved => {
-                if is-dragging && scale > 1.05 {
-                    offset-x = drag-start-offset-x + (self.mouse-x - drag-start-x);
-                    offset-y = drag-start-offset-y + (self.mouse-y - drag-start-y);
+                if is-dragging {
+                    if scale > 1.05 {
+                        offset-x = drag-start-offset-x + (self.mouse-x - drag-start-x);
+                        offset-y = drag-start-offset-y + (self.mouse-y - drag-start-y);
+                    } else {
+                        // rubber-band follow while swiping
+                        offset-x = (self.mouse-x - swipe-start-x) * 0.4;
+                    }
                 }
             }
             scroll-event(e) => {
