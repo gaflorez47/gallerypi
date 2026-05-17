@@ -223,6 +223,11 @@ fn scenario_large_gallery(ui: &AppWindow) {
     set_gallery(ui, rows, months);
 }
 
+fn scenario_month_scroller(ui: &AppWindow) {
+    scenario_large_gallery(ui);
+    ui.set_gallery_force_show_scroller(true);
+}
+
 // ── Viewer Scenarios ──────────────────────────────────────────────────────────
 
 fn scenario_viewer_image(ui: &AppWindow) {
@@ -247,6 +252,7 @@ fn render_screen(
     window: &Rc<MinimalSoftwareWindow>,
     setup: fn(&AppWindow),
 ) -> Vec<u8> {
+    ui.set_gallery_force_show_scroller(false);
     setup(ui);
     ui.window().request_redraw();
 
@@ -381,8 +387,9 @@ fn main() {
         ("04_multi_month",          scenario_multi_month),
         ("05_mixed_media",          scenario_mixed_media),
         ("06_large_gallery",        scenario_large_gallery),
-        ("07_viewer_image",         scenario_viewer_image),
-        ("08_viewer_loading",       scenario_viewer_loading),
+        ("07_month_scroller",       scenario_month_scroller),
+        ("08_viewer_image",         scenario_viewer_image),
+        ("09_viewer_loading",       scenario_viewer_loading),
     ];
 
     let mut report_entries: Vec<(&str, Vec<u8>)> = vec![];

@@ -25,6 +25,8 @@ export component AppWindow inherits Window {
     in-out property <length> thumb-size: 256px;
     // Set to a row index >= 0 to trigger an instant scroll in the gallery
     in-out property <int> gallery-scroll-to-row: -1;
+    // Force the month scroller thumb visible (for screenshot tests)
+    in property <bool> gallery-force-show-scroller: false;
     // Read-back: scroll position, visible area height, and list-view width (in px)
     out property <float> gallery-scroll-offset: gallery-screen.scroll-offset;
     out property <float> gallery-viewport-height: gallery-screen.viewport-height;
@@ -78,6 +80,7 @@ export component AppWindow inherits Window {
         grid-columns: root.grid-columns;
         thumb-size: root.thumb-size;
         scroll-to-row: root.gallery-scroll-to-row;
+        force-show-scroller: root.gallery-force-show-scroller;
         item-tapped(id, mt) => { root.item-tapped(id, mt); }
         jump-to-month(y, m) => { root.jump-to-month(y, m); }
         reminisce-tapped() => { root.reminisce-tapped(); }

@@ -6,15 +6,15 @@ import { ThumbnailCell } from "thumbnail_cell.slint";
 component MonthHeaderRow {
     in property <string> label;
 
-    Rectangle {
+    HorizontalLayout {
+        padding-left: 16px;
+        alignment: start;
         Text {
-            x: 16px;
             text: label;
             color: #aaaaaa;
             font-size: 24px;
             font-weight: 600;
             vertical-alignment: center;
-            horizontal-alignment: left;
         }
     }
 }
@@ -73,6 +73,8 @@ export component GalleryScreen {
     in-out property <length> thumb-size: 256px;
     // Set to row index >= 0 to trigger an instant scroll (no animation)
     in property <int> scroll-to-row: -1;
+
+    in property <bool> force-show-scroller: false;
 
     callback item-tapped(int, string);
     callback jump-to-month(int, int);
@@ -153,6 +155,7 @@ export component GalleryScreen {
                 month-entries: root.month-entries;
                 scroll-fraction: scroller-fraction;
                 scroll-tick: scroll-tick-counter;
+                force-show: root.force-show-scroller;
                 jump-to-month(y, m) => { root.jump-to-month(y, m); }
             }
         }

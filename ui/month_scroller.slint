@@ -4,6 +4,7 @@ export component MonthScroller {
     in property <[MonthEntry]> month-entries;
     in property <float> scroll-fraction;    // 0..1 current scroll position
     in property <int> scroll-tick;          // pulses on every scroll event
+    in property <bool> force-show: false;   // for screenshot tests
     callback jump-to-month(int, int);
 
     private property <bool> show-scroller: false;
@@ -89,8 +90,10 @@ export component MonthScroller {
         y: thumb-y;
         width: thumb-size;
         height: thumb-size;
-        opacity: (show-scroller || is-dragging) && month-entries.length >= 2 ? 1.0 : 0.0;
-        animate opacity { duration: 300ms; }
+        opacity: force-show && month-entries.length >= 2
+            ? 1.0
+            : (show-scroller || is-dragging) && month-entries.length >= 2 ? 1.0 : 0.0;
+        animate opacity { duration: force-show ? 0ms : 300ms; }
 
         Rectangle {
             border-radius: thumb-size / 2;
