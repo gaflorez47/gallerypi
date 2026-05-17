@@ -90,9 +90,7 @@ export component MonthScroller {
         y: thumb-y;
         width: thumb-size;
         height: thumb-size;
-        opacity: force-show && month-entries.length >= 2
-            ? 1.0
-            : (show-scroller || is-dragging) && month-entries.length >= 2 ? 1.0 : 0.0;
+        opacity: force-show || show-scroller || is-dragging ? 1.0 : 0.0;
         animate opacity { duration: force-show ? 0ms : 300ms; }
 
         Rectangle {

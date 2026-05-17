@@ -4,7 +4,6 @@ export component ThumbnailCell {
     in property <bool> thumb-ready;
     in property <string> media-type;
     in property <length> size: 256px;
-    callback tapped(int, string);
 
     width: size;
     height: size;
@@ -39,12 +38,6 @@ export component ThumbnailCell {
                 font-size: 10px;
                 horizontal-alignment: center;
                 vertical-alignment: center;
-            }
-        }
-
-        TouchArea {
-         clicked => {
-                tapped(item-id, media-type);
             }
         }
     }

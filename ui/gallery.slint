@@ -23,7 +23,6 @@ component ImageRow {
     in property <[ThumbnailData]> items;
     in property <int> item-count;
     in property <length> cell-size;
-    callback item-tapped(int, string);
 
     height: cell-size + 4px;
     HorizontalLayout {
@@ -37,7 +36,6 @@ component ImageRow {
             thumb-ready: item.thumb-ready;
             media-type: item.media-type;
             size: cell-size;
-            tapped(id, mt) => { item-tapped(id, mt); }
         }
     }
 }
@@ -46,7 +44,6 @@ component GalleryRowDelegate {
     in property <GalleryRowData> row-data;
     in property <int> n-cols;
     in property <length> thumb-size;
-    callback item-tapped(int, string);
 
     // Fill available width evenly, capped at thumb-size
     private property <length> cell-size: min(
@@ -56,13 +53,13 @@ component GalleryRowDelegate {
     height: row-data.is-header ? 48px : (cell-size + 4px);
 
     if row-data.is-header: MonthHeaderRow {
+        width: root.width;
         label: row-data.header-label;
     }
     if !row-data.is-header: ImageRow {
         items: row-data.items;
         item-count: row-data.item-count;
         cell-size: cell-size;
-        item-tapped(id, mt) => { item-tapped(id, mt); }
     }
 }
 
@@ -76,7 +73,7 @@ export component GalleryScreen {
 
     in property <bool> force-show-scroller: false;
 
-    callback item-tapped(int, string);
+    callback touch-tapped-at(float, float);  // (x_px, abs_y_px) in list content space
     callback jump-to-month(int, int);
     callback reminisce-tapped();
 
@@ -143,7 +140,54 @@ export component GalleryScreen {
                     row-data: row;
                     n-cols: root.grid-columns;
                     thumb-size: root.thumb-size;
-                    item-tapped(id, mt) => { root.item-tapped(id, mt); }
+                }
+            }
+
+            // Gesture overlay: intercepts touch drag for scrolling and taps for item selection.
+            // Positioned above list-view but below MonthScroller in z-order.
+            TouchArea {
+                x: 0; y: 0;
+                width: parent.width;
+                height: parent.height;
+
+                private property <float> ts-start-y: 0;
+                private property <float> ts-start-vp: 0;
+                private property <bool>  ts-scrolling: false;
+
+                pointer-event(e) => {
+                    if e.kind == PointerEventKind.down {
+                        ts-start-y  = self.mouse-y / 1px;
+                        ts-start-vp = list-view.viewport-y / 1px;
+                        ts-scrolling = false;
+                    } else if e.kind == PointerEventKind.up && !ts-scrolling {
+                        // Tap: forward absolute content position to Rust for item lookup
+                        touch-tapped-at(
+                            self.mouse-x / 1px,
+                            self.mouse-y / 1px - list-view.viewport-y / 1px
+                        );
+                    }
+                }
+                moved => {
+                    if abs(self.mouse-y / 1px - ts-start-y) > 8 {
+                        ts-scrolling = true;
+                    }
+                    if ts-scrolling {
+                        list-view.viewport-y = clamp(
+                            (ts-start-vp + self.mouse-y / 1px - ts-start-y) * 1px,
+                            -(gallery-rows.length * row-height - list-view.height),
+                            0px
+                        );
+                        root.scroll-tick-counter = root.scroll-tick-counter + 1;
+                    }
+                }
+                scroll-event(e) => {
+                    list-view.viewport-y = clamp(
+                        list-view.viewport-y + e.delta-y,
+                        -(gallery-rows.length * row-height - list-view.height),
+                        0px
+                    );
+                    root.scroll-tick-counter = root.scroll-tick-counter + 1;
+                    EventResult.accept
                 }
             }
 

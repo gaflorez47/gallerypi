@@ -189,6 +189,33 @@ impl GalleryController {
         self.all_items.iter().find(|i| i.id == id)
     }
 
+    /// Find the item tapped at absolute content position (x_px, abs_y_px).
+    /// Returns (item_id, media_type) or None if the position is on a header or out of bounds.
+    pub fn item_at_position(&self, x_px: f32, abs_y_px: f32) -> Option<(i64, String)> {
+        if self.row_tops.is_empty() {
+            return None;
+        }
+        // Binary search for the row whose top <= abs_y_px.
+        let row_idx = self.row_tops.partition_point(|&top| top <= abs_y_px).saturating_sub(1);
+        if row_idx >= self.rows.len() {
+            return None;
+        }
+        match &self.rows[row_idx] {
+            GalleryRow::MonthHeader { .. } => None,
+            GalleryRow::ImageRow { items } => {
+                // Compute cell size from last known lv_width (same formula as Slint).
+                let cell_size = if self.last_lv_width > 0.0 {
+                    let gaps = 4.0 + (self.n_cols.saturating_sub(1)) as f32 * 2.0;
+                    (self.last_lv_width - gaps) / self.n_cols.max(1) as f32
+                } else {
+                    return None;
+                };
+                let col_idx = ((x_px - 2.0) / (cell_size + 2.0)) as usize;
+                items.get(col_idx).map(|t| (t.item_id, t.media_type.clone()))
+            }
+        }
+    }
+
     /// Returns item thumbs for rows that overlap [scroll_y, scroll_y + viewport_h],
     /// expanded by `buffer` extra rows on each side.
     pub fn rows_in_view(

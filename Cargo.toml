@@ -11,6 +11,10 @@ path = "src/main.rs"
 name = "screenshot_test"
 path = "src/bin/screenshot_test.rs"
 
+[[bin]]
+name = "scroll_test"
+path = "src/bin/scroll_test.rs"
+
 [dependencies]
 # UI
 slint = { version = "1.9", features = ["backend-winit", "renderer-skia", "renderer-software"] }

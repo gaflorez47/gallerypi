@@ -32,7 +32,7 @@ export component AppWindow inherits Window {
     out property <float> gallery-viewport-height: gallery-screen.viewport-height;
     out property <float> gallery-list-view-width: gallery-screen.list-view-width;
 
-    callback item-tapped(int, string);       // item_id, media_type
+    callback touch-tapped-at(float, float);  // (x_px, abs_y_px) in list content space
     callback jump-to-month(int, int);        // year, month
     callback reminisce-tapped();
 
@@ -81,7 +81,7 @@ export component AppWindow inherits Window {
         thumb-size: root.thumb-size;
         scroll-to-row: root.gallery-scroll-to-row;
         force-show-scroller: root.gallery-force-show-scroller;
-        item-tapped(id, mt) => { root.item-tapped(id, mt); }
+        touch-tapped-at(x, ay) => { root.touch-tapped-at(x, ay); }
         jump-to-month(y, m) => { root.jump-to-month(y, m); }
         reminisce-tapped() => { root.reminisce-tapped(); }
     }

@@ -123,43 +123,42 @@ pub fn run(config: Config, db_path: PathBuf) -> Result<()> {
     // --- Gallery callbacks ---
     let window_weak = window.as_weak();
 
-    window.on_item_tapped({
+    window.on_touch_tapped_at({
         let gallery_clone = gallery_ctrl.clone();
         let viewer_clone = viewer_ctrl.clone();
         let video_clone = video_ctrl.clone();
         let window_weak = window_weak.clone();
-        move |item_id, media_type| {
-            tracing::info!("on_item_tapped: item_id={} media_type={}", item_id, media_type);
-            let Some(window) = window_weak.upgrade() else {
-                tracing::warn!("on_item_tapped: window_weak upgrade failed");
+        move |x_px, abs_y_px| {
+            tracing::info!("on_touch_tapped_at: x={} abs_y={}", x_px, abs_y_px);
+            let Some(window) = window_weak.upgrade() else { return };
+            let gallery = gallery_clone.borrow();
+            let Some((item_id, media_type)) = gallery.item_at_position(x_px, abs_y_px) else {
+                tracing::debug!("on_touch_tapped_at: no item at ({}, {})", x_px, abs_y_px);
                 return;
             };
-            let gallery = gallery_clone.borrow();
-            let item_id = item_id as i64;
+            let Some(item) = gallery.item_by_id(item_id) else {
+                tracing::warn!("on_touch_tapped_at: item_id={} not found", item_id);
+                return;
+            };
+            tracing::info!("on_touch_tapped_at: item_id={} media_type={} path={}", item_id, media_type, item.path);
+            let year = item.year;
+            let month = item.month;
+            let path = item.path.clone();
 
-            if let Some(item) = gallery.item_by_id(item_id) {
-                tracing::info!("on_item_tapped: found item path={}", item.path);
-                let year = item.year;
-                let month = item.month;
-                let path = item.path.clone();
-
-                if media_type == "video" {
-                    drop(gallery);
-                    if let Err(e) = video_clone.borrow_mut().open(&path) {
-                        tracing::error!("Failed to open video: {}", e);
-                        return;
-                    }
-                    window.set_current_screen(Screen::Video);
-                } else {
-                    let month_items = gallery.items_in_month(year, month);
-                    drop(gallery);
-                    viewer_clone.borrow_mut().open(item_id, month_items);
-                    window.set_viewer_loading(true);
-                    window.set_current_screen(Screen::Viewer);
-                    load_image_async(&path, &window_weak);
+            if media_type == "video" {
+                drop(gallery);
+                if let Err(e) = video_clone.borrow_mut().open(&path) {
+                    tracing::error!("Failed to open video: {}", e);
+                    return;
                 }
+                window.set_current_screen(Screen::Video);
             } else {
-                tracing::warn!("on_item_tapped: item_id={} not found in gallery", item_id);
+                let month_items = gallery.items_in_month(year, month);
+                drop(gallery);
+                viewer_clone.borrow_mut().open(item_id, month_items);
+                window.set_viewer_loading(true);
+                window.set_current_screen(Screen::Viewer);
+                load_image_async(&path, &window_weak);
             }
         }
     });
