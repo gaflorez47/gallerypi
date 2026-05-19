@@ -6,13 +6,13 @@ use anyhow::Result;
 use chrono::{Datelike, TimeZone, Utc};
 use crossbeam_channel::Sender;
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 #[derive(Debug)]
 pub enum ScanEvent {
     Progress { scanned: usize, total_estimate: usize },
-    Complete { total: usize },
+    Complete { total: usize, removed: usize },
     Error(String),
 }
 
@@ -58,10 +58,23 @@ impl Scanner {
             }
         }
 
+        // Detect directories that were in the cache but no longer exist on disk.
+        let seen_dirs: HashSet<&str> = changed_dirs
+            .iter()
+            .map(|(p, _)| p.as_str())
+            .chain(unchanged_dirs.iter().filter_map(|p| p.to_str()))
+            .collect();
+        let removed_dirs: Vec<String> = dir_mtime_cache
+            .keys()
+            .filter(|k| !seen_dirs.contains(k.as_str()))
+            .cloned()
+            .collect();
+
         tracing::info!(
-            "Dir check: {} unchanged, {} changed/new",
+            "Dir check: {} unchanged, {} changed/new, {} removed",
             unchanged_dirs.len(),
-            changed_dirs.len()
+            changed_dirs.len(),
+            removed_dirs.len(),
         );
 
         // Step 3: Walk media files only in changed directories.
@@ -126,6 +139,69 @@ impl Scanner {
             }
         }
 
+        // Step 3.5: Reconcile changed directories — delete DB records for files no longer on disk.
+        let mut orphaned_thumbs: Vec<String> = Vec::new();
+        let mut total_removed = 0usize;
+
+        for (dir_str, _) in &changed_dirs {
+            let disk_files = walker::collect_media_in_dir(Path::new(dir_str));
+            match queries::get_direct_children_in_dir(&db.conn, dir_str) {
+                Ok(db_records) => {
+                    let to_delete: Vec<i64> = db_records
+                        .iter()
+                        .filter(|(_, path, _)| !disk_files.contains(path))
+                        .map(|(id, _, _)| *id)
+                        .collect();
+                    let thumb_paths: Vec<String> = db_records
+                        .iter()
+                        .filter(|(_, path, _)| !disk_files.contains(path))
+                        .filter_map(|(_, _, tp)| tp.clone())
+                        .collect();
+                    if !to_delete.is_empty() {
+                        match queries::delete_items_by_ids(&db.conn, &to_delete) {
+                            Ok(n) => {
+                                tracing::debug!("Removed {} orphaned records from {}", n, dir_str);
+                                total_removed += n;
+                                orphaned_thumbs.extend(thumb_paths);
+                            }
+                            Err(e) => tracing::warn!("Failed to delete orphans in {}: {}", dir_str, e),
+                        }
+                    }
+                }
+                Err(e) => tracing::warn!("Reconcile query failed for {}: {}", dir_str, e),
+            }
+        }
+
+        // Step 3.6: Clean up entirely removed directories.
+        for dir_str in &removed_dirs {
+            match queries::get_all_descendants_in_dir(&db.conn, dir_str) {
+                Ok(records) => {
+                    let ids: Vec<i64> = records.iter().map(|(id, _, _)| *id).collect();
+                    orphaned_thumbs.extend(records.iter().filter_map(|(_, _, tp)| tp.clone()));
+                    if !ids.is_empty() {
+                        match queries::delete_items_by_ids(&db.conn, &ids) {
+                            Ok(n) => {
+                                tracing::debug!("Removed {} records from deleted dir {}", n, dir_str);
+                                total_removed += n;
+                            }
+                            Err(e) => tracing::warn!("Failed to delete records for removed dir {}: {}", dir_str, e),
+                        }
+                    }
+                }
+                Err(e) => tracing::warn!("Descendants query failed for {}: {}", dir_str, e),
+            }
+            if let Err(e) = queries::delete_scanned_dirs_with_prefix(&db.conn, dir_str) {
+                tracing::warn!("Failed to clean scanned_dirs for {}: {}", dir_str, e);
+            }
+        }
+
+        // Step 3.7: Delete orphaned thumbnail files from disk.
+        for tp in &orphaned_thumbs {
+            if let Err(e) = std::fs::remove_file(tp) {
+                tracing::warn!("Failed to delete orphaned thumbnail {}: {}", tp, e);
+            }
+        }
+
         // Step 4: Persist updated directory mtimes so next launch can skip them.
         if !changed_dirs.is_empty() {
             if let Err(e) = queries::update_dir_mtimes(&db.conn, &changed_dirs) {
@@ -133,8 +209,11 @@ impl Scanner {
             }
         }
 
-        tracing::info!("Scan complete: {} files checked, {} new/updated", count, new_items);
-        let _ = self.progress_tx.send(ScanEvent::Complete { total: count });
+        tracing::info!(
+            "Scan complete: {} files checked, {} new/updated, {} removed",
+            count, new_items, total_removed
+        );
+        let _ = self.progress_tx.send(ScanEvent::Complete { total: count, removed: total_removed });
         Ok(count)
     }
 }

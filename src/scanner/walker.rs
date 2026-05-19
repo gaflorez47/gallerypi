@@ -10,6 +10,29 @@ pub struct MediaFile {
     pub media_type: &'static str,
 }
 
+/// Collect media files that are direct children of `dir` (non-recursive).
+pub fn collect_media_in_dir(dir: &Path) -> HashSet<String> {
+    let mut set = HashSet::new();
+    let Ok(entries) = std::fs::read_dir(dir) else { return set };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let ext = path
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_lowercase());
+        let ext = ext.as_deref().unwrap_or("");
+        if IMAGE_EXTENSIONS.contains(&ext) || VIDEO_EXTENSIONS.contains(&ext) {
+            if let Some(s) = path.to_str() {
+                set.insert(s.to_owned());
+            }
+        }
+    }
+    set
+}
+
 /// Walk `dir` and yield all supported media files.
 pub fn walk_media(dir: &Path) -> impl Iterator<Item = MediaFile> {
     walk_media_filtered(dir, HashSet::new())

@@ -128,6 +128,58 @@ pub fn get_items_needing_thumbnails(conn: &Connection) -> Result<Vec<(i64, Strin
     Ok(items)
 }
 
+pub fn get_direct_children_in_dir(
+    conn: &Connection,
+    dir: &str,
+) -> Result<Vec<(i64, String, Option<String>)>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, path, thumb_path FROM media_items
+         WHERE path LIKE ?1 || '/%'
+           AND INSTR(SUBSTR(path, LENGTH(?1) + 2), '/') = 0",
+    )?;
+    let rows = stmt
+        .query_map(params![dir], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+pub fn get_all_descendants_in_dir(
+    conn: &Connection,
+    dir: &str,
+) -> Result<Vec<(i64, String, Option<String>)>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, path, thumb_path FROM media_items WHERE path LIKE ?1 || '/%'",
+    )?;
+    let rows = stmt
+        .query_map(params![dir], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+pub fn delete_items_by_ids(conn: &Connection, ids: &[i64]) -> Result<usize> {
+    let tx = conn.unchecked_transaction()?;
+    let mut stmt = tx.prepare("DELETE FROM media_items WHERE id = ?1")?;
+    let mut deleted = 0usize;
+    for id in ids {
+        deleted += stmt.execute(params![id])?;
+    }
+    drop(stmt);
+    tx.commit()?;
+    Ok(deleted)
+}
+
+pub fn delete_scanned_dirs_with_prefix(conn: &Connection, prefix: &str) -> Result<()> {
+    conn.execute(
+        "DELETE FROM scanned_dirs WHERE path = ?1 OR path LIKE ?1 || '/%'",
+        params![prefix],
+    )?;
+    Ok(())
+}
+
 pub fn get_all_dir_mtimes(conn: &Connection) -> Result<HashMap<String, i64>> {
     let mut stmt = conn.prepare("SELECT path, dir_mtime FROM scanned_dirs")?;
     let entries = stmt

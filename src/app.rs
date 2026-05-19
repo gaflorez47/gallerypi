@@ -100,8 +100,8 @@ pub fn run(config: Config, db_path: PathBuf) -> Result<()> {
                                 w.set_scan_file_count(scanned as i32);
                             }
                         }
-                        ScanEvent::Complete { total } => {
-                            tracing::info!("Scan complete ({} files), loading gallery", total);
+                        ScanEvent::Complete { total, removed } => {
+                            tracing::info!("Scan complete ({} files, {} removed), loading gallery", total, removed);
                             if let Some(w) = window_weak.upgrade() {
                                 let mut gallery = gallery_clone.borrow_mut();
                                 if let Err(e) = gallery.reload(&db_clone.borrow(), thumb_size) {
