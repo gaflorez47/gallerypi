@@ -53,11 +53,19 @@ component GalleryRowDelegate {
     in property <GalleryRowData> row-data;
     in property <int> n-cols;
     in property <length> thumb-size;
+    in property <int> row-index: 0;
 
     callback tapped(int);
     callback touch-down(float);
     callback touch-move(float);
     callback touch-up(float);
+    callback request-row-thumbnails(int);
+
+    init => {
+        if !row-data.is-header {
+            request-row-thumbnails(row-index);
+        }
+    }
 
     // Fill available width evenly, capped at thumb-size
     private property <length> cell-size: min(
@@ -103,14 +111,15 @@ export component GalleryScreen {
     in property <[MonthEntry]> month-entries;
     in-out property <int> grid-columns: 4;
     in-out property <length> thumb-size: 256px;
-    // Set to row index >= 0 to trigger an instant scroll (no animation)
-    in property <int> scroll-to-row: -1;
+    // Set to pixel offset >= 0 to trigger an instant scroll (no animation)
+    in property <float> scroll-to-y: -1;
 
     in property <bool> force-show-scroller: false;
 
     callback cell-tapped(int);   // item-id
     callback jump-to-month(int, int);
     callback reminisce-tapped();
+    callback request-row-thumbnails(int);
 
     // Read by Rust: scroll position, visible area height, and list view width.
     out property <float> scroll-offset: -list-view.viewport-y / 1px;
@@ -172,10 +181,10 @@ export component GalleryScreen {
         scroll-tick-counter = scroll-tick-counter + 1;
     }
 
-    // Scroll instantly when scroll-to-row changes (no animation)
-    changed scroll-to-row => {
-        if scroll-to-row >= 0 {
-            list-view.viewport-y = -(scroll-to-row * row-height);
+    // Scroll instantly when scroll-to-y changes (no animation)
+    changed scroll-to-y => {
+        if scroll-to-y >= 0 {
+            list-view.viewport-y = -scroll-to-y * 1px;
         }
     }
 
@@ -210,12 +219,14 @@ export component GalleryScreen {
         Rectangle {
             // Gallery list view (full width)
             list-view := ListView {
-                for row in gallery-rows: GalleryRowDelegate {
+                for row[i] in gallery-rows: GalleryRowDelegate {
                     row-data: row;
+                    row-index: i;
                     n-cols: root.grid-columns;
                     thumb-size: root.thumb-size;
 
                     tapped(id) => { root.cell-tapped(id); }
+                    request-row-thumbnails(idx) => { root.request-row-thumbnails(idx); }
 
                     touch-down(y) => {
                         root.ts-start-y   = y;

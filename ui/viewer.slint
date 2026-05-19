@@ -30,6 +30,8 @@ export component ViewerScreen {
             x: (parent.width - self.width) / 2 + offset-x;
             y: (parent.height - self.height) / 2 + offset-y;
             image-fit: contain;
+            opacity: loading ? 0.0 : 1.0;
+            animate opacity { duration: loading ? 0ms : 300ms; }
         }
 
         if loading: Rectangle {

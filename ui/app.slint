@@ -23,8 +23,8 @@ export component AppWindow inherits Window {
     in-out property <int> grid-columns: 4;
     // thumb-size in logical pixels (set as float from Rust)
     in-out property <length> thumb-size: 256px;
-    // Set to a row index >= 0 to trigger an instant scroll in the gallery
-    in-out property <int> gallery-scroll-to-row: -1;
+    // Set to a pixel offset >= 0 to trigger an instant scroll in the gallery
+    in-out property <float> gallery-scroll-to-y: -1;
     // Force the month scroller thumb visible (for screenshot tests)
     in property <bool> gallery-force-show-scroller: false;
     // Read-back: scroll position, visible area height, and list-view width (in px)
@@ -35,6 +35,7 @@ export component AppWindow inherits Window {
     callback cell-tapped(int);               // item-id
     callback jump-to-month(int, int);        // year, month
     callback reminisce-tapped();
+    callback request-row-thumbnails(int);
 
     // Viewer state
     in property <image> viewer-image;
@@ -79,11 +80,12 @@ export component AppWindow inherits Window {
         month-entries: root.month-entries;
         grid-columns: root.grid-columns;
         thumb-size: root.thumb-size;
-        scroll-to-row: root.gallery-scroll-to-row;
+        scroll-to-y: root.gallery-scroll-to-y;
         force-show-scroller: root.gallery-force-show-scroller;
         cell-tapped(id) => { root.cell-tapped(id); }
         jump-to-month(y, m) => { root.jump-to-month(y, m); }
         reminisce-tapped() => { root.reminisce-tapped(); }
+        request-row-thumbnails(idx) => { root.request-row-thumbnails(idx); }
     }
 
     if current-screen == Screen.Viewer: ViewerScreen {

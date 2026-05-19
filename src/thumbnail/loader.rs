@@ -45,7 +45,11 @@ impl ThumbnailLoader {
         }
         let path = PathBuf::from(thumb_path);
         if path.exists() {
-            let _ = self.work_tx.try_send(LoadJob { item_id, thumb_path: path });
+            if self.work_tx.try_send(LoadJob { item_id, thumb_path: path }).is_err() {
+                tracing::warn!("[loader] work channel full, dropping load job for id={}", item_id);
+            }
+        } else {
+            tracing::warn!("[loader] thumb file missing for id={}: {}", item_id, thumb_path);
         }
         None
     }

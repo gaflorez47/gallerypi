@@ -2,15 +2,33 @@ use crate::config::Config;
 use crate::db::queries;
 use crate::util::hash::thumb_cache_key;
 use anyhow::Result;
-use crossbeam_channel::{bounded, Receiver, Sender};
+use crossbeam_channel::{bounded, Receiver};
 use fast_image_resize::images::Image as FirImage;
 use fast_image_resize::{PixelType, Resizer};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 pub struct GenJob {
     pub item_id: i64,
     pub path: String,
     pub mtime: i64,
+}
+
+/// LIFO job queue: push appends to the back; the generator pops from the back.
+/// Newest submissions (currently-visible items) are processed before older ones,
+/// so a scroll jump doesn't stall behind a large backlog of off-screen work.
+#[derive(Clone)]
+pub struct GenQueue {
+    stack: Arc<Mutex<Vec<GenJob>>>,
+    /// One-shot wake-up channel: the worker blocks here when the stack is empty.
+    notify_tx: crossbeam_channel::Sender<()>,
+}
+
+impl GenQueue {
+    pub fn push(&self, job: GenJob) {
+        self.stack.lock().unwrap().push(job);
+        let _ = self.notify_tx.try_send(());
+    }
 }
 
 pub fn generate_thumbnail(
@@ -58,18 +76,23 @@ pub fn generate_thumbnail(
 }
 
 /// Start a persistent on-demand thumbnail generator.
-/// Returns (job_tx, result_rx). Send GenJob items on job_tx; completed (item_id, thumb_path)
-/// arrive on result_rx. The worker thread runs for the lifetime of the app.
+/// Returns (GenQueue, result_rx).  Push GenJob items via queue.push(); completed
+/// (item_id, thumb_path) arrive on result_rx.  The worker runs for the app lifetime.
+/// The queue is LIFO: most recently pushed jobs (currently visible items) run first,
+/// so scroll jumps don't stall behind a backlog of off-screen work.
 pub fn start_on_demand_generator(
     config: &Config,
     db_path: &Path,
-) -> (Sender<GenJob>, Receiver<(i64, String)>) {
+) -> (GenQueue, Receiver<(i64, String)>) {
     let thumb_dir = crate::config::thumb_dir();
     let thumb_size = config.gallery.thumbnail_size;
     let db_path = db_path.to_path_buf();
 
-    let (job_tx, job_rx) = bounded::<GenJob>(256);
+    let stack: Arc<Mutex<Vec<GenJob>>> = Arc::new(Mutex::new(Vec::new()));
+    let (notify_tx, notify_rx) = bounded::<()>(1);
     let (result_tx, result_rx) = bounded::<(i64, String)>(256);
+
+    let queue = GenQueue { stack: stack.clone(), notify_tx };
 
     std::thread::Builder::new()
         .name("thumb-gen".into())
@@ -82,11 +105,23 @@ pub fn start_on_demand_generator(
                 }
             };
 
-            for job in job_rx {
-                // Small sleep on RPi to prevent thermal throttle
+            loop {
+                // Pop from the back (LIFO): newest job = most recently visible items.
+                let job = stack.lock().unwrap().pop();
+                let job = match job {
+                    Some(j) => j,
+                    None => {
+                        // Stack empty — wait for a push notification, then retry.
+                        let _ = notify_rx.recv();
+                        continue;
+                    }
+                };
+
+                // Small sleep on RPi to prevent thermal throttle.
                 #[cfg(target_arch = "aarch64")]
                 std::thread::sleep(std::time::Duration::from_millis(5));
 
+                tracing::info!("Generating thumbnail: id={} path={}", job.item_id, job.path);
                 let source_path = Path::new(&job.path);
                 match generate_thumbnail(source_path, job.mtime, &thumb_dir, thumb_size) {
                     Ok(thumb_path) => {
@@ -94,6 +129,7 @@ pub fn start_on_demand_generator(
                         if let Err(e) = queries::mark_thumb_ready(&conn, job.item_id, &thumb_str) {
                             tracing::warn!("Failed to mark thumb ready for id {}: {}", job.item_id, e);
                         } else {
+                            tracing::info!("Thumbnail ready: id={} thumb={}", job.item_id, thumb_str);
                             let _ = result_tx.send((job.item_id, thumb_str));
                         }
                     }
@@ -105,5 +141,5 @@ pub fn start_on_demand_generator(
         })
         .expect("Failed to spawn thumb-gen thread");
 
-    (job_tx, result_rx)
+    (queue, result_rx)
 }

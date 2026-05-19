@@ -27,6 +27,10 @@ pub struct GalleryController {
     pub item_positions: HashMap<i64, (usize, usize)>,
     /// The live Slint row model — kept here so we can update individual rows
     pub row_model: Rc<VecModel<GalleryRowData>>,
+    /// Direct references to each image row's inner items model (None for header rows).
+    /// Updating these in-place avoids replacing the ModelRc on the outer row, which
+    /// means Slint's `for item in items:` binding observes changes directly.
+    item_models: Vec<Option<Rc<VecModel<ThumbnailData>>>>,
 }
 
 impl GalleryController {
@@ -41,6 +45,7 @@ impl GalleryController {
             all_items: Vec::new(),
             item_positions: HashMap::new(),
             row_model: Rc::new(VecModel::from(vec![])),
+            item_models: Vec::new(),
         }
     }
 
@@ -71,9 +76,46 @@ impl GalleryController {
             top
         }).collect();
 
-        // Rebuild Slint model — set_vec replaces all rows at once
-        let slint_rows: Vec<GalleryRowData> =
-            self.rows.iter().map(model::row_to_slint).collect();
+        // Rebuild Slint model and item_models together so every image row shares
+        // the same Rc<VecModel<ThumbnailData>> between item_models and the Slint row.
+        // This lets update_thumbnail mutate the inner model directly, which Slint's
+        // `for item in items:` binding observes without any outer set_row_data call.
+        let mut slint_rows: Vec<GalleryRowData> = Vec::with_capacity(self.rows.len());
+        let mut item_models: Vec<Option<Rc<VecModel<ThumbnailData>>>> =
+            Vec::with_capacity(self.rows.len());
+        for row in &self.rows {
+            match row {
+                GalleryRow::MonthHeader { label, .. } => {
+                    slint_rows.push(GalleryRowData {
+                        is_header: true,
+                        header_label: label.as_str().into(),
+                        items: ModelRc::new(VecModel::from(vec![])),
+                        item_count: 0,
+                    });
+                    item_models.push(None);
+                }
+                GalleryRow::ImageRow { items } => {
+                    let slint_items: Vec<ThumbnailData> = items
+                        .iter()
+                        .map(|t| ThumbnailData {
+                            item_id: t.item_id as i32,
+                            thumb_image: Default::default(),
+                            thumb_ready: false,
+                            media_type: t.media_type.as_str().into(),
+                        })
+                        .collect();
+                    let inner = Rc::new(VecModel::from(slint_items));
+                    slint_rows.push(GalleryRowData {
+                        is_header: false,
+                        header_label: Default::default(),
+                        item_count: items.len() as i32,
+                        items: ModelRc::new(inner.clone()),
+                    });
+                    item_models.push(Some(inner));
+                }
+            }
+        }
+        self.item_models = item_models;
         self.row_model.set_vec(slint_rows);
         Ok(())
     }
@@ -102,6 +144,10 @@ impl GalleryController {
             .min(thumb_size);
         self.last_cell_size = cell_size;
         let image_row_h = cell_size + 4.0;
+        tracing::info!(
+            "[ensure_row_tops] lv_width={} n_cols={} thumb_size={} cell_size={:.2} image_row_h={:.2} total_rows={}",
+            lv_width, self.n_cols, thumb_size, cell_size, image_row_h, self.rows.len()
+        );
         let mut y = 0.0f32;
         self.row_tops = self.rows.iter().map(|r| {
             let top = y;
@@ -111,6 +157,14 @@ impl GalleryController {
             };
             top
         }).collect();
+
+        // Log total content height and last few row_tops for sanity check.
+        if let Some(&last_top) = self.row_tops.last() {
+            tracing::info!(
+                "[ensure_row_tops] recomputed: {} rows, last row_tops={:.1} (total_h≈{:.1})",
+                self.row_tops.len(), last_top, last_top + image_row_h
+            );
+        }
     }
 
     /// Clear a single thumbnail cell in the live model (eviction).
@@ -118,44 +172,48 @@ impl GalleryController {
         let Some(&(row_idx, col_idx)) = self.item_positions.get(&item_id) else {
             return;
         };
-        tracing::trace!("clear_thumbnail: item_id={} row={} col={}", item_id, row_idx, col_idx);
-        let Some(mut row) = self.row_model.row_data(row_idx) else {
+        let Some(Some(inner)) = self.item_models.get(row_idx) else {
             return;
         };
-        let items_count = row.item_count as usize;
-        let old_items = row.items.clone();
-        let mut new_items: Vec<ThumbnailData> = (0..items_count)
-            .map(|i| old_items.row_data(i).unwrap_or_default())
-            .collect();
-        if col_idx < new_items.len() && new_items[col_idx].thumb_ready {
-            new_items[col_idx].thumb_image = Default::default();
-            new_items[col_idx].thumb_ready = false;
-            row.items = ModelRc::new(VecModel::from(new_items));
-            self.row_model.set_row_data(row_idx, row);
+        tracing::trace!("clear_thumbnail: item_id={} row={} col={}", item_id, row_idx, col_idx);
+        if let Some(mut cell) = inner.row_data(col_idx) {
+            if cell.thumb_ready {
+                cell.thumb_image = Default::default();
+                cell.thumb_ready = false;
+                inner.set_row_data(col_idx, cell);
+            }
         }
     }
 
     /// Update a single thumbnail cell in the live model.
     pub fn update_thumbnail(&self, item_id: i64, image: slint::Image) {
         let Some(&(row_idx, col_idx)) = self.item_positions.get(&item_id) else {
+            tracing::warn!("update_thumbnail: item_id={} not in item_positions", item_id);
+            return;
+        };
+        let Some(Some(inner)) = self.item_models.get(row_idx) else {
+            tracing::warn!("update_thumbnail: item_id={} row={} has no inner model", item_id, row_idx);
             return;
         };
         tracing::trace!("update_thumbnail: item_id={} row={} col={}", item_id, row_idx, col_idx);
-        let Some(mut row) = self.row_model.row_data(row_idx) else {
-            return;
-        };
-        // Rebuild items for this row with the new image at col_idx
-        let items_count = row.item_count as usize;
-        let old_items = row.items.clone();
-        let mut new_items: Vec<ThumbnailData> = (0..items_count)
-            .map(|i| old_items.row_data(i).unwrap_or_default())
-            .collect();
-        if col_idx < new_items.len() {
-            new_items[col_idx].thumb_image = image;
-            new_items[col_idx].thumb_ready = true;
+        if let Some(mut cell) = inner.row_data(col_idx) {
+            cell.thumb_image = image;
+            cell.thumb_ready = true;
+            inner.set_row_data(col_idx, cell);
+        } else {
+            tracing::warn!("update_thumbnail: item_id={} row={} col={} out of bounds (inner len={})",
+                item_id, row_idx, col_idx, inner.row_count());
         }
-        row.items = ModelRc::new(VecModel::from(new_items));
-        self.row_model.set_row_data(row_idx, row);
+    }
+
+    /// Returns the pixel Y offset of a row (top of that row), from row_tops.
+    pub fn pixel_offset_for_row(&self, row_idx: usize) -> f32 {
+        let offset = self.row_tops.get(row_idx).copied().unwrap_or(0.0);
+        tracing::info!(
+            "[pixel_offset_for_row] row_idx={} offset={:.1} last_lv_width={:.1} last_cell_size={:.2} total_row_tops={}",
+            row_idx, offset, self.last_lv_width, self.last_cell_size, self.row_tops.len()
+        );
+        offset
     }
 
     /// Find the row index for a given (year, month).
@@ -193,50 +251,12 @@ impl GalleryController {
         self.all_items.iter().find(|i| i.id == id)
     }
 
-    /// Returns item thumbs for rows that overlap [scroll_y, scroll_y + viewport_h],
-    /// expanded by `buffer` extra rows on each side.
-    pub fn rows_in_view(
-        &self,
-        scroll_y: f32,
-        viewport_h: f32,
-        buffer_rows: usize,
-    ) -> Vec<&GalleryThumb> {
-        if self.row_tops.is_empty() {
-            return Vec::new();
+    /// Returns the thumbnails in a single row by index (empty slice for header rows).
+    pub fn items_in_row(&self, row_idx: usize) -> &[GalleryThumb] {
+        match self.rows.get(row_idx) {
+            Some(GalleryRow::ImageRow { items }) => items,
+            _ => &[],
         }
-        let view_top = scroll_y;
-        let view_bot = scroll_y + viewport_h;
-
-        // Binary search for the first row whose bottom edge is >= view_top.
-        // row_tops[i] is the top of row i; its bottom is row_tops[i+1] (or end of content).
-        let first = self.row_tops
-            .partition_point(|&top| top < view_top)
-            .saturating_sub(buffer_rows + 1);
-        let last_exclusive = {
-            let past = self.row_tops.partition_point(|&top| top <= view_bot);
-            (past + buffer_rows).min(self.rows.len())
-        };
-
-        tracing::debug!(
-            "rows_in_view: scroll_y={:.1} viewport_h={:.1} view_top={:.1} view_bot={:.1} \
-             first={} last_exclusive={} total_rows={}",
-            scroll_y, viewport_h, view_top, view_bot, first, last_exclusive, self.rows.len()
-        );
-
-        let mut out = Vec::new();
-        for (i, row) in self.rows[first..last_exclusive].iter().enumerate() {
-            match row {
-                GalleryRow::ImageRow { items } => {
-                    tracing::debug!("  row[{}] ImageRow: {} items", first + i, items.len());
-                    out.extend(items.iter());
-                }
-                GalleryRow::MonthHeader { .. } => {
-                    tracing::debug!("  row[{}] MonthHeader (skipped)", first + i);
-                }
-            }
-        }
-        tracing::debug!("rows_in_view -> {} thumbs", out.len());
-        out
     }
-}
 
+}

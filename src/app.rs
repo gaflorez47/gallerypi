@@ -15,8 +15,6 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-/// How many extra rows above and below the visible area to pre-load.
-const SCROLL_BUFFER_ROWS: usize = 2;
 /// Maximum number of thumbnails kept live in the VecModel before eviction.
 const MAX_LOADED_ITEMS: usize = 300;
 
@@ -57,6 +55,9 @@ pub fn run(config: Config, db_path: PathBuf) -> Result<()> {
     let gallery_ctrl = Rc::new(RefCell::new(gallery_ctrl));
     let viewer_ctrl = Rc::new(RefCell::new(ViewerController::new()));
     let video_ctrl = Rc::new(RefCell::new(VideoController::new(config.video.clone())));
+
+    // Row indices reported visible by GalleryRowDelegate.init; drained by thumb_timer.
+    let pending_rows: Rc<RefCell<HashSet<usize>>> = Rc::new(RefCell::new(HashSet::new()));
 
     // --- Scanner ---
     let scan_rx: Option<crossbeam_channel::Receiver<ScanEvent>> =
@@ -129,14 +130,14 @@ pub fn run(config: Config, db_path: PathBuf) -> Result<()> {
         let video_clone = video_ctrl.clone();
         let window_weak = window_weak.clone();
         move |item_id: i32| {
-            tracing::info!("on_cell_tapped: item_id={}", item_id);
+            tracing::debug!("on_cell_tapped: item_id={}", item_id);
             let Some(window) = window_weak.upgrade() else { return };
             let gallery = gallery_clone.borrow();
             let Some(item) = gallery.item_by_id(item_id as i64) else {
-                tracing::warn!("on_cell_tapped: item_id={} not found", item_id);
+                tracing::debug!("on_cell_tapped: item_id={} not found", item_id);
                 return;
             };
-            tracing::info!("on_cell_tapped: media_type={} path={}", item.media_type, item.path);
+            tracing::debug!("on_cell_tapped: media_type={} path={}", item.media_type, item.path);
             let media_type = item.media_type.clone();
             let year = item.year;
             let month = item.month;
@@ -164,10 +165,19 @@ pub fn run(config: Config, db_path: PathBuf) -> Result<()> {
         let gallery_clone = gallery_ctrl.clone();
         let window_weak = window_weak.clone();
         move |year, month| {
-            if let Some(row_idx) = gallery_clone.borrow().row_index_for_month(year, month) {
-                if let Some(w) = window_weak.upgrade() {
-                    w.set_gallery_scroll_to_row(row_idx as i32);
-                }
+            let Some(w) = window_weak.upgrade() else { return };
+            let mut gallery = gallery_clone.borrow_mut();
+            let lv_width = w.get_gallery_list_view_width();
+            tracing::info!("[jump_to_month] year={} month={} lv_width={:.1}", year, month, lv_width);
+            if lv_width > 0.0 {
+                gallery.ensure_row_tops(lv_width, thumb_size);
+            }
+            if let Some(row_idx) = gallery.row_index_for_month(year, month) {
+                let scroll_y = gallery.pixel_offset_for_row(row_idx);
+                tracing::info!("[jump_to_month] row_idx={} scroll_y={:.1} -> set_gallery_scroll_to_y", row_idx, scroll_y);
+                w.set_gallery_scroll_to_y(scroll_y);
+            } else {
+                tracing::warn!("[jump_to_month] no row found for year={} month={}", year, month);
             }
         }
     });
@@ -176,15 +186,25 @@ pub fn run(config: Config, db_path: PathBuf) -> Result<()> {
         let gallery_clone = gallery_ctrl.clone();
         let window_weak = window_weak.clone();
         move || {
-            let gallery = gallery_clone.borrow();
-            if let Some(entry) = gallery.random_month() {
-                tracing::info!("Reminisce: jumping to {} {}", entry.month, entry.year);
-                let row_idx = entry.row_index as i32;
-                drop(gallery);
-                if let Some(w) = window_weak.upgrade() {
-                    w.set_gallery_scroll_to_row(row_idx);
-                }
+            let Some(w) = window_weak.upgrade() else { return };
+            let mut gallery = gallery_clone.borrow_mut();
+            let lv_width = w.get_gallery_list_view_width();
+            if lv_width > 0.0 {
+                gallery.ensure_row_tops(lv_width, thumb_size);
             }
+            if let Some(entry) = gallery.random_month() {
+                let scroll_y = gallery.pixel_offset_for_row(entry.row_index);
+                tracing::info!("[reminisce] year={} month={} row_idx={} lv_width={:.1} scroll_y={:.1}",
+                    entry.year, entry.month, entry.row_index, lv_width, scroll_y);
+                w.set_gallery_scroll_to_y(scroll_y);
+            }
+        }
+    });
+
+    window.on_request_row_thumbnails({
+        let pending_rows = pending_rows.clone();
+        move |row_idx: i32| {
+            pending_rows.borrow_mut().insert(row_idx as usize);
         }
     });
 
@@ -304,31 +324,33 @@ pub fn run(config: Config, db_path: PathBuf) -> Result<()> {
         );
     }
 
-    // Thumbnail polling (50ms): determine visible rows, request load/generation as needed.
-    // gen_queued deduplicates generation requests; loaded_items tracks what's live in VecModel.
+    // Thumbnail polling (50ms): deliver completed loads/generations and process newly visible rows.
+    // pending_rows is filled by on_request_row_thumbnails (fired from GalleryRowDelegate.init).
+    // gen_queued/load_requested deduplicate in-flight work; loaded_items tracks VecModel state.
     let thumb_timer = Timer::default();
     {
         let thumb_loader = thumb_loader.clone();
         let gallery_clone = gallery_ctrl.clone();
-        let window_weak3 = window.as_weak();
         let mut gen_queued: HashSet<i64> = HashSet::new();
+        let mut load_requested: HashSet<i64> = HashSet::new();
         let mut loaded_items: HashSet<i64> = HashSet::new();
-        let mut stats_tick: u32 = 0;
-        let mut stats_thumb_updates: u32 = 0;
-        let mut stats_row_clears: u32 = 0;
+        let mut visible_item_ids: HashSet<i64> = HashSet::new();
         thumb_timer.start(
             TimerMode::Repeated,
-            std::time::Duration::from_millis(1000),
+            std::time::Duration::from_millis(50),
             move || {
                 // Deliver newly generated thumbnails → enqueue disk load.
                 while let Ok((id, path)) = gen_rx.try_recv() {
+                    tracing::debug!("[thumb_timer] gen_rx: id={} path={}", id, path);
+                    gen_queued.remove(&id);
+                    load_requested.remove(&id);
                     let img = thumb_loader.borrow_mut().request(id, &path);
                     if let Some(img) = img {
                         gallery_clone.borrow().update_thumbnail(id, img);
                         loaded_items.insert(id);
-                        stats_thumb_updates += 1;
+                    } else {
+                        load_requested.insert(id);
                     }
-                    // else: load job enqueued; arrives via poll_results below
                 }
 
                 // Deliver completed disk loads to the gallery model.
@@ -337,76 +359,58 @@ pub fn run(config: Config, db_path: PathBuf) -> Result<()> {
                     let gallery = gallery_clone.borrow();
                     for (item_id, img) in results {
                         gallery.update_thumbnail(item_id, img);
+                        load_requested.remove(&item_id);
                         loaded_items.insert(item_id);
-                        stats_thumb_updates += 1;
                     }
                 }
 
-                // Determine visible rows and request load/generation for each item.
-                let Some(w) = window_weak3.upgrade() else { return };
-                let scroll_y = w.get_gallery_scroll_offset();
-                let viewport_h = w.get_gallery_viewport_height();
-                if viewport_h <= 0.0 {
-                    return;
-                }
-
-                // Update row_tops when list-view width changes (e.g. window resize).
-                let lv_width = w.get_gallery_list_view_width();
-                if lv_width > 0.0 {
-                    gallery_clone.borrow_mut().ensure_row_tops(lv_width, thumb_size);
-                }
-
-                let gallery = gallery_clone.borrow();
-                let visible = gallery.rows_in_view(scroll_y, viewport_h, SCROLL_BUFFER_ROWS);
-
-                // Evict thumbnails from VecModel when too many are loaded.
-                if loaded_items.len() > MAX_LOADED_ITEMS {
-                    let visible_ids: HashSet<i64> = visible.iter().map(|t| t.item_id).collect();
-                    let to_evict: Vec<i64> = loaded_items
-                        .iter()
-                        .filter(|&&id| !visible_ids.contains(&id))
-                        .copied()
-                        .collect();
-                    for id in to_evict {
-                        loaded_items.remove(&id);
-                        gen_queued.remove(&id);
-                        gallery.clear_thumbnail(id);
-                        stats_row_clears += 1;
-                    }
-                }
-
-                for thumb in visible {
-                    if loaded_items.contains(&thumb.item_id) {
-                        continue; // already in VecModel, nothing to do
-                    }
-                    if thumb.thumb_ready {
-                        if let Some(path) = &thumb.thumb_path {
-                            if let Some(img) = thumb_loader.borrow_mut().request(thumb.item_id, path) {
-                                gallery.update_thumbnail(thumb.item_id, img);
-                                loaded_items.insert(thumb.item_id);
-                                stats_thumb_updates += 1;
+                // Process rows that became visible since last tick.
+                let rows_to_load: Vec<usize> = pending_rows.borrow_mut().drain().collect();
+                if !rows_to_load.is_empty() {
+                    let gallery = gallery_clone.borrow();
+                    visible_item_ids.clear();
+                    for &row_idx in &rows_to_load {
+                        for thumb in gallery.items_in_row(row_idx) {
+                            visible_item_ids.insert(thumb.item_id);
+                            if loaded_items.contains(&thumb.item_id) {
+                                continue;
+                            }
+                            if thumb.thumb_ready {
+                                if let Some(path) = &thumb.thumb_path {
+                                    if !load_requested.contains(&thumb.item_id) {
+                                        if let Some(img) = thumb_loader.borrow_mut().request(thumb.item_id, path) {
+                                            gallery.update_thumbnail(thumb.item_id, img);
+                                            loaded_items.insert(thumb.item_id);
+                                        } else {
+                                            load_requested.insert(thumb.item_id);
+                                        }
+                                    }
+                                }
+                            } else if !gen_queued.contains(&thumb.item_id) {
+                                gen_tx.push(GenJob {
+                                    item_id: thumb.item_id,
+                                    path: thumb.path.clone(),
+                                    mtime: thumb.mtime,
+                                });
+                                gen_queued.insert(thumb.item_id);
                             }
                         }
-                    } else if !gen_queued.contains(&thumb.item_id) {
-                        let _ = gen_tx.try_send(GenJob {
-                            item_id: thumb.item_id,
-                            path: thumb.path.clone(),
-                            mtime: thumb.mtime,
-                        });
-                        gen_queued.insert(thumb.item_id);
                     }
-                }
 
-                // Log per-second summary every 20 ticks (~1s at 50ms).
-                stats_tick += 1;
-                if stats_tick >= 20 {
-                    tracing::debug!(
-                        "[thumb_timer/s] thumb_updates={} row_clears={} loaded={}",
-                        stats_thumb_updates, stats_row_clears, loaded_items.len()
-                    );
-                    stats_tick = 0;
-                    stats_thumb_updates = 0;
-                    stats_row_clears = 0;
+                    // Evict thumbnails from VecModel when too many are loaded.
+                    if loaded_items.len() > MAX_LOADED_ITEMS {
+                        let to_evict: Vec<i64> = loaded_items
+                            .iter()
+                            .filter(|&&id| !visible_item_ids.contains(&id))
+                            .copied()
+                            .collect();
+                        for id in to_evict {
+                            loaded_items.remove(&id);
+                            gen_queued.remove(&id);
+                            load_requested.remove(&id);
+                            gallery.clear_thumbnail(id);
+                        }
+                    }
                 }
             },
         );
