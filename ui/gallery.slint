@@ -88,6 +88,40 @@ export component GalleryScreen {
         (list-view.width - 4px - max(0, grid-columns - 1) * 2px) / max(1, grid-columns)
     ) + 4px;
 
+    // Computed minimum viewport-y (maximum scroll position)
+    private property <length> min-viewport-y: -(gallery-rows.length * row-height - list-view.height);
+
+    // Fling / momentum state
+    private property <float> fling-velocity: 0;   // px per 16ms tick
+    private property <bool>  fling-active: false;
+    private property <float> velocity-ema: 0;     // rolling velocity estimate (px/event)
+
+    Timer {
+        interval: 16ms;
+        running: fling-active;
+        triggered => {
+            if list-view.viewport-y > 0px {
+                // Overscrolled top — spring back
+                root.fling-velocity = root.fling-velocity * 0.80
+                    - (list-view.viewport-y / 1px) * 0.15;
+            } else if list-view.viewport-y < root.min-viewport-y {
+                // Overscrolled bottom — spring back
+                root.fling-velocity = root.fling-velocity * 0.80
+                    - ((list-view.viewport-y - root.min-viewport-y) / 1px) * 0.15;
+            } else {
+                root.fling-velocity = root.fling-velocity * 0.94;
+            }
+            list-view.viewport-y = list-view.viewport-y + root.fling-velocity * 1px;
+            root.scroll-tick-counter = root.scroll-tick-counter + 1;
+            if abs(root.fling-velocity) < 0.5
+               && list-view.viewport-y <= 0px
+               && list-view.viewport-y >= root.min-viewport-y {
+                root.fling-active = false;
+                root.fling-velocity = 0;
+            }
+        }
+    }
+
     // Fast-scroller state
     private property <int> scroll-tick-counter: 0;
     private property <float> scroller-fraction:
@@ -152,18 +186,32 @@ export component GalleryScreen {
                 private property <float> ts-start-y: 0;
                 private property <float> ts-start-vp: 0;
                 private property <bool>  ts-scrolling: false;
+                private property <float> ts-last-y: 0;
 
                 pointer-event(e) => {
                     if e.kind == PointerEventKind.down {
                         ts-start-y  = self.mouse-y / 1px;
                         ts-start-vp = list-view.viewport-y / 1px;
+                        ts-last-y   = self.mouse-y / 1px;
                         ts-scrolling = false;
-                    } else if e.kind == PointerEventKind.up && !ts-scrolling {
-                        // Tap: forward absolute content position to Rust for item lookup
-                        touch-tapped-at(
-                            self.mouse-x / 1px,
-                            self.mouse-y / 1px - list-view.viewport-y / 1px
-                        );
+                        root.fling-active = false;
+                        root.fling-velocity = 0;
+                        root.velocity-ema = 0;
+                    } else if e.kind == PointerEventKind.up {
+                        if ts-scrolling {
+                            if abs(root.velocity-ema) > 0.5
+                               || list-view.viewport-y > 0px
+                               || list-view.viewport-y < root.min-viewport-y {
+                                root.fling-velocity = root.velocity-ema;
+                                root.fling-active = true;
+                            }
+                        } else {
+                            // Tap: forward absolute content position to Rust for item lookup
+                            touch-tapped-at(
+                                self.mouse-x / 1px,
+                                self.mouse-y / 1px - list-view.viewport-y / 1px
+                            );
+                        }
                     }
                 }
                 moved => {
@@ -171,11 +219,16 @@ export component GalleryScreen {
                         ts-scrolling = true;
                     }
                     if ts-scrolling {
-                        list-view.viewport-y = clamp(
-                            (ts-start-vp + self.mouse-y / 1px - ts-start-y) * 1px,
-                            -(gallery-rows.length * row-height - list-view.height),
-                            0px
-                        );
+                        let raw-y = (ts-start-vp + self.mouse-y / 1px - ts-start-y) * 1px;
+                        if raw-y > 0px {
+                            list-view.viewport-y = raw-y * 0.4;
+                        } else if raw-y < root.min-viewport-y {
+                            list-view.viewport-y = root.min-viewport-y + (raw-y - root.min-viewport-y) * 0.4;
+                        } else {
+                            list-view.viewport-y = raw-y;
+                        }
+                        root.velocity-ema = root.velocity-ema * 0.6 + (self.mouse-y / 1px - ts-last-y) * 0.4;
+                        ts-last-y = self.mouse-y / 1px;
                         root.scroll-tick-counter = root.scroll-tick-counter + 1;
                     }
                 }
