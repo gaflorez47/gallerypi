@@ -123,24 +123,21 @@ pub fn run(config: Config, db_path: PathBuf) -> Result<()> {
     // --- Gallery callbacks ---
     let window_weak = window.as_weak();
 
-    window.on_touch_tapped_at({
+    window.on_cell_tapped({
         let gallery_clone = gallery_ctrl.clone();
         let viewer_clone = viewer_ctrl.clone();
         let video_clone = video_ctrl.clone();
         let window_weak = window_weak.clone();
-        move |x_px, abs_y_px| {
-            tracing::info!("on_touch_tapped_at: x={} abs_y={}", x_px, abs_y_px);
+        move |item_id: i32| {
+            tracing::info!("on_cell_tapped: item_id={}", item_id);
             let Some(window) = window_weak.upgrade() else { return };
             let gallery = gallery_clone.borrow();
-            let Some((item_id, media_type)) = gallery.item_at_position(x_px, abs_y_px) else {
-                tracing::debug!("on_touch_tapped_at: no item at ({}, {})", x_px, abs_y_px);
+            let Some(item) = gallery.item_by_id(item_id as i64) else {
+                tracing::warn!("on_cell_tapped: item_id={} not found", item_id);
                 return;
             };
-            let Some(item) = gallery.item_by_id(item_id) else {
-                tracing::warn!("on_touch_tapped_at: item_id={} not found", item_id);
-                return;
-            };
-            tracing::info!("on_touch_tapped_at: item_id={} media_type={} path={}", item_id, media_type, item.path);
+            tracing::info!("on_cell_tapped: media_type={} path={}", item.media_type, item.path);
+            let media_type = item.media_type.clone();
             let year = item.year;
             let month = item.month;
             let path = item.path.clone();
@@ -155,7 +152,7 @@ pub fn run(config: Config, db_path: PathBuf) -> Result<()> {
             } else {
                 let month_items = gallery.items_in_month(year, month);
                 drop(gallery);
-                viewer_clone.borrow_mut().open(item_id, month_items);
+                viewer_clone.borrow_mut().open(item_id as i64, month_items);
                 window.set_viewer_loading(true);
                 window.set_current_screen(Screen::Viewer);
                 load_image_async(&path, &window_weak);

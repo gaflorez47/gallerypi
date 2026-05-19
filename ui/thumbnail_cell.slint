@@ -5,6 +5,14 @@ export component ThumbnailCell {
     in property <string> media-type;
     in property <length> size: 256px;
 
+    callback tapped(int);        // item-id — fires on release if no drag occurred
+    callback touch-down(float);  // raw viewport-relative touch y
+    callback touch-move(float);  // raw viewport-relative touch y
+    callback touch-up(float);    // raw viewport-relative touch y
+
+    private property <float> td-start-y: 0;
+    private property <bool>  td-dragging: false;
+
     width: size;
     height: size;
 
@@ -39,6 +47,27 @@ export component ThumbnailCell {
                 horizontal-alignment: center;
                 vertical-alignment: center;
             }
+        }
+    }
+
+    TouchArea {
+        pointer-event(e) => {
+            if e.kind == PointerEventKind.down {
+                root.td-start-y  = self.mouse-y / 1px;
+                root.td-dragging = false;
+                root.touch-down(self.mouse-y / 1px);
+            } else if e.kind == PointerEventKind.up {
+                if !root.td-dragging {
+                    root.tapped(root.item-id);
+                }
+                root.touch-up(self.mouse-y / 1px);
+            }
+        }
+        moved => {
+            if abs(self.mouse-y / 1px - root.td-start-y) > 8 {
+                root.td-dragging = true;
+            }
+            root.touch-move(self.mouse-y / 1px);
         }
     }
 }

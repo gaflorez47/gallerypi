@@ -18,6 +18,8 @@ pub struct GalleryController {
     row_tops: Vec<f32>,
     /// Last list-view width used for row_tops computation; -1 forces first recompute.
     last_lv_width: f32,
+    /// Cell size capped at thumb_size (mirrors Slint's GalleryRowDelegate formula).
+    last_cell_size: f32,
     month_entries: Vec<MonthEntry>,
     n_cols: usize,
     all_items: Vec<MediaItem>,
@@ -33,6 +35,7 @@ impl GalleryController {
             rows: Vec::new(),
             row_tops: Vec::new(),
             last_lv_width: -1.0,
+            last_cell_size: 0.0,
             month_entries: Vec::new(),
             n_cols,
             all_items: Vec::new(),
@@ -97,6 +100,7 @@ impl GalleryController {
         let cell_size = ((lv_width - 4.0 - (self.n_cols.saturating_sub(1)) as f32 * 2.0)
             / self.n_cols.max(1) as f32)
             .min(thumb_size);
+        self.last_cell_size = cell_size;
         let image_row_h = cell_size + 4.0;
         let mut y = 0.0f32;
         self.row_tops = self.rows.iter().map(|r| {
@@ -189,33 +193,6 @@ impl GalleryController {
         self.all_items.iter().find(|i| i.id == id)
     }
 
-    /// Find the item tapped at absolute content position (x_px, abs_y_px).
-    /// Returns (item_id, media_type) or None if the position is on a header or out of bounds.
-    pub fn item_at_position(&self, x_px: f32, abs_y_px: f32) -> Option<(i64, String)> {
-        if self.row_tops.is_empty() {
-            return None;
-        }
-        // Binary search for the row whose top <= abs_y_px.
-        let row_idx = self.row_tops.partition_point(|&top| top <= abs_y_px).saturating_sub(1);
-        if row_idx >= self.rows.len() {
-            return None;
-        }
-        match &self.rows[row_idx] {
-            GalleryRow::MonthHeader { .. } => None,
-            GalleryRow::ImageRow { items } => {
-                // Compute cell size from last known lv_width (same formula as Slint).
-                let cell_size = if self.last_lv_width > 0.0 {
-                    let gaps = 4.0 + (self.n_cols.saturating_sub(1)) as f32 * 2.0;
-                    (self.last_lv_width - gaps) / self.n_cols.max(1) as f32
-                } else {
-                    return None;
-                };
-                let col_idx = ((x_px - 2.0) / (cell_size + 2.0)) as usize;
-                items.get(col_idx).map(|t| (t.item_id, t.media_type.clone()))
-            }
-        }
-    }
-
     /// Returns item thumbs for rows that overlap [scroll_y, scroll_y + viewport_h],
     /// expanded by `buffer` extra rows on each side.
     pub fn rows_in_view(
@@ -262,3 +239,4 @@ impl GalleryController {
         out
     }
 }
+

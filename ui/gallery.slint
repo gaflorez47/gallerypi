@@ -24,6 +24,11 @@ component ImageRow {
     in property <int> item-count;
     in property <length> cell-size;
 
+    callback tapped(int);
+    callback touch-down(float);
+    callback touch-move(float);
+    callback touch-up(float);
+
     height: cell-size + 4px;
     HorizontalLayout {
         alignment: start;
@@ -36,6 +41,10 @@ component ImageRow {
             thumb-ready: item.thumb-ready;
             media-type: item.media-type;
             size: cell-size;
+            tapped(id)      => { root.tapped(id); }
+            touch-down(y)   => { root.touch-down(y); }
+            touch-move(y)   => { root.touch-move(y); }
+            touch-up(y)     => { root.touch-up(y); }
         }
     }
 }
@@ -45,12 +54,34 @@ component GalleryRowDelegate {
     in property <int> n-cols;
     in property <length> thumb-size;
 
+    callback tapped(int);
+    callback touch-down(float);
+    callback touch-move(float);
+    callback touch-up(float);
+
     // Fill available width evenly, capped at thumb-size
     private property <length> cell-size: min(
         thumb-size,
         (self.width - 4px - max(0, n-cols - 1) * 2px) / max(1, n-cols)
     );
     height: row-data.is-header ? 48px : (cell-size + 4px);
+
+    // Background TouchArea: lowest z — handles drag for header rows and cell gaps.
+    // Cell TouchAreas (higher z) capture events in their own areas first.
+    TouchArea {
+        width: root.width;
+        height: root.height;
+        pointer-event(e) => {
+            if e.kind == PointerEventKind.down {
+                root.touch-down(self.mouse-y / 1px);
+            } else if e.kind == PointerEventKind.up {
+                root.touch-up(self.mouse-y / 1px);
+            }
+        }
+        moved => {
+            root.touch-move(self.mouse-y / 1px);
+        }
+    }
 
     if row-data.is-header: MonthHeaderRow {
         width: root.width;
@@ -60,6 +91,10 @@ component GalleryRowDelegate {
         items: row-data.items;
         item-count: row-data.item-count;
         cell-size: cell-size;
+        tapped(id)      => { root.tapped(id); }
+        touch-down(y)   => { root.touch-down(y); }
+        touch-move(y)   => { root.touch-move(y); }
+        touch-up(y)     => { root.touch-up(y); }
     }
 }
 
@@ -73,7 +108,7 @@ export component GalleryScreen {
 
     in property <bool> force-show-scroller: false;
 
-    callback touch-tapped-at(float, float);  // (x_px, abs_y_px) in list content space
+    callback cell-tapped(int);   // item-id
     callback jump-to-month(int, int);
     callback reminisce-tapped();
 
@@ -95,6 +130,12 @@ export component GalleryScreen {
     private property <float> fling-velocity: 0;   // px per 16ms tick
     private property <bool>  fling-active: false;
     private property <float> velocity-ema: 0;     // rolling velocity estimate (px/event)
+
+    // Drag / scroll tracking (owned here; rows fire callbacks to update)
+    private property <float> ts-start-y: 0;
+    private property <float> ts-start-vp: 0;
+    private property <bool>  ts-scrolling: false;
+    private property <float> ts-last-y: 0;
 
     Timer {
         interval: 16ms;
@@ -173,73 +214,48 @@ export component GalleryScreen {
                     row-data: row;
                     n-cols: root.grid-columns;
                     thumb-size: root.thumb-size;
-                }
-            }
 
-            // Gesture overlay: intercepts touch drag for scrolling and taps for item selection.
-            // Positioned above list-view but below MonthScroller in z-order.
-            TouchArea {
-                x: 0; y: 0;
-                width: parent.width;
-                height: parent.height;
+                    tapped(id) => { root.cell-tapped(id); }
 
-                private property <float> ts-start-y: 0;
-                private property <float> ts-start-vp: 0;
-                private property <bool>  ts-scrolling: false;
-                private property <float> ts-last-y: 0;
-
-                pointer-event(e) => {
-                    if e.kind == PointerEventKind.down {
-                        ts-start-y  = self.mouse-y / 1px;
-                        ts-start-vp = list-view.viewport-y / 1px;
-                        ts-last-y   = self.mouse-y / 1px;
-                        ts-scrolling = false;
-                        root.fling-active = false;
+                    touch-down(y) => {
+                        root.ts-start-y   = y;
+                        root.ts-start-vp  = list-view.viewport-y / 1px;
+                        root.ts-last-y    = y;
+                        root.ts-scrolling = false;
+                        root.fling-active  = false;
                         root.fling-velocity = 0;
-                        root.velocity-ema = 0;
-                    } else if e.kind == PointerEventKind.up {
-                        if ts-scrolling {
+                        root.velocity-ema   = 0;
+                    }
+
+                    touch-move(y) => {
+                        if abs(y - root.ts-start-y) > 8 {
+                            root.ts-scrolling = true;
+                        }
+                        if root.ts-scrolling {
+                            let raw-y = (root.ts-start-vp + y - root.ts-start-y) * 1px;
+                            if raw-y > 0px {
+                                list-view.viewport-y = raw-y * 0.4;
+                            } else if raw-y < root.min-viewport-y {
+                                list-view.viewport-y = root.min-viewport-y + (raw-y - root.min-viewport-y) * 0.4;
+                            } else {
+                                list-view.viewport-y = raw-y;
+                            }
+                            root.velocity-ema = root.velocity-ema * 0.6 + (y - root.ts-last-y) * 0.4;
+                            root.ts-last-y = y;
+                            root.scroll-tick-counter = root.scroll-tick-counter + 1;
+                        }
+                    }
+
+                    touch-up(y) => {
+                        if root.ts-scrolling {
                             if abs(root.velocity-ema) > 0.5
                                || list-view.viewport-y > 0px
                                || list-view.viewport-y < root.min-viewport-y {
                                 root.fling-velocity = root.velocity-ema;
                                 root.fling-active = true;
                             }
-                        } else {
-                            // Tap: forward absolute content position to Rust for item lookup
-                            touch-tapped-at(
-                                self.mouse-x / 1px,
-                                self.mouse-y / 1px - list-view.viewport-y / 1px
-                            );
                         }
                     }
-                }
-                moved => {
-                    if abs(self.mouse-y / 1px - ts-start-y) > 8 {
-                        ts-scrolling = true;
-                    }
-                    if ts-scrolling {
-                        let raw-y = (ts-start-vp + self.mouse-y / 1px - ts-start-y) * 1px;
-                        if raw-y > 0px {
-                            list-view.viewport-y = raw-y * 0.4;
-                        } else if raw-y < root.min-viewport-y {
-                            list-view.viewport-y = root.min-viewport-y + (raw-y - root.min-viewport-y) * 0.4;
-                        } else {
-                            list-view.viewport-y = raw-y;
-                        }
-                        root.velocity-ema = root.velocity-ema * 0.6 + (self.mouse-y / 1px - ts-last-y) * 0.4;
-                        ts-last-y = self.mouse-y / 1px;
-                        root.scroll-tick-counter = root.scroll-tick-counter + 1;
-                    }
-                }
-                scroll-event(e) => {
-                    list-view.viewport-y = clamp(
-                        list-view.viewport-y + e.delta-y,
-                        -(gallery-rows.length * row-height - list-view.height),
-                        0px
-                    );
-                    root.scroll-tick-counter = root.scroll-tick-counter + 1;
-                    EventResult.accept
                 }
             }
 
