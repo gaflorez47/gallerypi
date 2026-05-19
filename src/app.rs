@@ -391,6 +391,7 @@ pub fn run(config: Config, db_path: PathBuf) -> Result<()> {
                                     item_id: thumb.item_id,
                                     path: thumb.path.clone(),
                                     mtime: thumb.mtime,
+                                    media_type: thumb.media_type.clone(),
                                 });
                                 gen_queued.insert(thumb.item_id);
                             }

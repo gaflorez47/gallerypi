@@ -12,6 +12,7 @@ pub struct GenJob {
     pub item_id: i64,
     pub path: String,
     pub mtime: i64,
+    pub media_type: String,
 }
 
 /// LIFO job queue: push appends to the back; the generator pops from the back.
@@ -75,6 +76,43 @@ pub fn generate_thumbnail(
     Ok(thumb_path)
 }
 
+pub fn generate_video_thumbnail(
+    source_path: &Path,
+    source_mtime: i64,
+    thumb_dir: &Path,
+    thumb_size: u32,
+) -> Result<PathBuf> {
+    let key = thumb_cache_key(source_path.to_str().unwrap_or(""), source_mtime);
+    let thumb_path = thumb_dir.join(format!("{}.jpg", key));
+
+    if thumb_path.exists() {
+        return Ok(thumb_path);
+    }
+
+    let filter = format!(
+        "scale={s}:{s}:force_original_aspect_ratio=increase,crop={s}:{s}",
+        s = thumb_size
+    );
+    let status = std::process::Command::new("ffmpeg")
+        .args([
+            "-ss", "1",
+            "-i", source_path.to_str().unwrap_or(""),
+            "-frames:v", "1",
+            "-vf", &filter,
+            "-q:v", "2",
+            "-y",
+            thumb_path.to_str().unwrap_or(""),
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()?;
+
+    if !status.success() {
+        anyhow::bail!("ffmpeg exited with status {}", status);
+    }
+    Ok(thumb_path)
+}
+
 /// Start a persistent on-demand thumbnail generator.
 /// Returns (GenQueue, result_rx).  Push GenJob items via queue.push(); completed
 /// (item_id, thumb_path) arrive on result_rx.  The worker runs for the app lifetime.
@@ -123,7 +161,12 @@ pub fn start_on_demand_generator(
 
                 tracing::info!("Generating thumbnail: id={} path={}", job.item_id, job.path);
                 let source_path = Path::new(&job.path);
-                match generate_thumbnail(source_path, job.mtime, &thumb_dir, thumb_size) {
+                let result = if job.media_type == "video" {
+                    generate_video_thumbnail(source_path, job.mtime, &thumb_dir, thumb_size)
+                } else {
+                    generate_thumbnail(source_path, job.mtime, &thumb_dir, thumb_size)
+                };
+                match result {
                     Ok(thumb_path) => {
                         let thumb_str = thumb_path.to_string_lossy().into_owned();
                         if let Err(e) = queries::mark_thumb_ready(&conn, job.item_id, &thumb_str) {

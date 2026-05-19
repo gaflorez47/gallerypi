@@ -120,7 +120,7 @@ pub fn get_month_groups(conn: &Connection) -> Result<Vec<MonthGroup>> {
 
 pub fn get_items_needing_thumbnails(conn: &Connection) -> Result<Vec<(i64, String)>> {
     let mut stmt = conn.prepare(
-        "SELECT id, path FROM media_items WHERE thumb_ready = 0 AND media_type = 'image' ORDER BY media_date DESC",
+        "SELECT id, path FROM media_items WHERE thumb_ready = 0 ORDER BY media_date DESC",
     )?;
     let items = stmt
         .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))?
