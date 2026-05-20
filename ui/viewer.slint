@@ -94,17 +94,17 @@ export component ViewerScreen {
 
         // Close button (top-right)
         Rectangle {
-            x: parent.width - 76px;
+            x: parent.width - 68px;
             y: 12px;
-            width: 64px;
-            height: 64px;
-            background: #1a2a4add;
-            border-radius: 32px;
+            width: 56px;
+            height: 56px;
+            background: close-ta.has-hover ? #444444cc : #222222cc;
+            border-radius: 28px;
             drop-shadow-blur: 8px;
             drop-shadow-color: #000000aa;
             drop-shadow-offset-x: 0px;
             drop-shadow-offset-y: 2px;
-            TouchArea {
+            close-ta := TouchArea {
                 clicked => {
                     scale = 1.0;
                     offset-x = 0px;
@@ -115,7 +115,7 @@ export component ViewerScreen {
             Text {
                 text: "✕";
                 color: white;
-                font-size: 28px;
+                font-size: 20px;
                 font-weight: 700;
                 horizontal-alignment: center;
                 vertical-alignment: center;
