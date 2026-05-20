@@ -50,7 +50,8 @@ sha2 = "0.10"
 hex = "0.4"
 
 # Video
-libmpv2 = "5"
+ffmpeg-next = "7"
+rodio = { version = "0.19", default-features = false }
 
 # Error handling & logging
 anyhow = "1"

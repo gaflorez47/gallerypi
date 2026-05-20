@@ -7,7 +7,7 @@ Offline media gallery app for Raspberry Pi 4 (1GB RAM) and Linux desktop. Displa
 - **UI**: Slint 1.9 with winit/Wayland backend + Skia renderer (NOT bare-metal DRM/KMS)
 - **DB**: SQLite via rusqlite (bundled feature)
 - **Thumbnails**: rayon + fast_image_resize v5 (SIMD/ARM NEON)
-- **Video**: mpv subprocess with Unix IPC JSON socket (NOT libmpv2 — v5.x only has OpenGL render API, no SW buffer)
+- **Video**: ffmpeg-next (in-process SW decode → RGBA frames) + rodio (audio). Frames delivered to Slint via crossbeam channel, same pattern as thumbnails.
 - **Config**: TOML via serde
 
 ## Building
@@ -46,7 +46,7 @@ src/
     loader.rs     # channel-based LRU loader (Send-safe)
   gallery/        # GalleryController, VecModel, row building
   viewer/         # ViewerController, swipe navigation
-  video/          # VideoController: mpv subprocess + Unix IPC
+  video/          # VideoController: ffmpeg-next decoder thread + rodio audio
   util/           # hash, paths, time helpers
 ui/
   app.slint       # AppWindow, Screen enum, all properties
@@ -63,7 +63,7 @@ deploy/
 
 ## Key Design Decisions
 
-**Video**: Uses mpv as a subprocess launched with `--fullscreen --input-ipc-server=<socket>`. Controls (play/pause, seek, volume) go over JSON IPC. This avoids libmpv2's OpenGL-only render API which is incompatible with Slint's Skia renderer without complex FBO bridging.
+**Video**: Uses ffmpeg-next for in-process software decode. A dedicated worker thread demuxes/decodes video to RGBA8 frames (via swscale) and audio to f32 PCM (via swresample → rodio sink). Frames are sent over a crossbeam channel; the main thread converts them to `slint::Image` via `SharedPixelBuffer` in a 33ms timer — the same pattern as thumbnail loading. Controls (pause/seek/volume/stop) go over a `VideoCommand` channel. This replaces the previous mpv subprocess approach, which opened a separate OS window and required a system mpv installation.
 
 **Thumbnail thread safety**: `slint::Image` is not `Send`. Worker threads load JPEG bytes into `Vec<u8>` and send over a crossbeam channel. The main thread converts to `slint::Image` in a 50ms Slint Timer (`poll_results()`).
 
@@ -96,8 +96,12 @@ sudo systemctl enable --now gallerypi-kiosk
 ## System Dependencies
 
 ```bash
-sudo apt install libmpv-dev  # required for build (mpv IPC uses system mpv binary at runtime)
-sudo apt install cage         # for kiosk mode
+# Video decode (replaces libmpv-dev)
+sudo apt install libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev
+# Required for ffmpeg-sys-next bindgen step
+sudo apt install libclang-dev
+# Kiosk mode
+sudo apt install cage
 sudo apt install libxkbcommon-x11-0
 ```
 

@@ -1,2 +1,1 @@
-/// Reserved for future OpenGL FBO bridge implementation.
-/// The mpv subprocess approach in mod.rs is used instead.
+// Removed: no longer needed with ffmpeg-next software decode approach.

@@ -289,17 +289,19 @@ pub fn run(config: Config, db_path: PathBuf) -> Result<()> {
         let mut vid_last_playing: bool = false;
         video_timer.start(
             TimerMode::Repeated,
-            std::time::Duration::from_millis(250),
+            std::time::Duration::from_millis(33),
             move || {
                 if let Some(w) = window_weak2.upgrade() {
                     if w.get_current_screen() == Screen::Video {
                         let mut vc = video_clone.borrow_mut();
-                        // Detect mpv exit → return to gallery
+                        // Detect decoder exit → return to gallery
                         if vc.check_exited() {
                             w.set_current_screen(Screen::Gallery);
                             return;
                         }
-                        vc.poll_state();
+                        if let Some(img) = vc.poll_frame() {
+                            w.set_video_frame(img);
+                        }
                         let pos = vc.get_position() as f32;
                         let dur = vc.get_duration() as f32;
                         let playing = vc.is_playing();

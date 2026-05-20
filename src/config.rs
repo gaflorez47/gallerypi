@@ -50,7 +50,6 @@ impl Default for UiConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VideoConfig {
-    pub hardware_decode: bool,
     pub default_volume: u8,
     pub loop_videos: bool,
 }
@@ -58,7 +57,6 @@ pub struct VideoConfig {
 impl Default for VideoConfig {
     fn default() -> Self {
         Self {
-            hardware_decode: true,
             default_volume: 80,
             loop_videos: true,
         }

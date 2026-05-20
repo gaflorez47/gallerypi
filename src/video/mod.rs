@@ -1,101 +1,153 @@
-/// Video playback via mpv subprocess with JSON IPC control.
-///
-/// mpv renders fullscreen (leveraging its built-in hardware decode and OSC).
-/// We control play/pause/seek/volume via the mpv JSON IPC socket.
-/// The Slint video screen shows a minimal overlay; detecting mpv exit returns to gallery.
-pub mod mpv;
+pub mod decoder;
 
 use crate::config::VideoConfig;
-use anyhow::{anyhow, Result};
-use crossbeam_channel::{bounded, Receiver};
-use std::io::Write;
-use std::os::unix::net::UnixStream;
-use std::path::{Path, PathBuf};
-use std::process::Child;
-use std::time::Duration;
+use crossbeam_channel::{bounded, Receiver, Sender};
+use slint::SharedPixelBuffer;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
+use std::thread::JoinHandle;
+
+/// A decoded RGBA video frame, safe to send across threads.
+pub struct VideoFrame {
+    pub pixels: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+    pub pts: f64,
+}
+
+pub enum VideoCommand {
+    Pause,
+    Resume,
+    Seek(f64),
+    SetVolume(f64),
+    Stop,
+}
+
+pub struct SharedVideoState {
+    pub position: AtomicU64,
+    pub duration: AtomicU64,
+    pub paused: AtomicBool,
+    pub ended: AtomicBool,
+}
+
+impl SharedVideoState {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            position: AtomicU64::new(0f64.to_bits()),
+            duration: AtomicU64::new(0f64.to_bits()),
+            paused: AtomicBool::new(false),
+            ended: AtomicBool::new(false),
+        })
+    }
+}
 
 pub struct VideoController {
-    child: Option<Child>,
-    ipc_socket: PathBuf,
-    pub exit_rx: Option<Receiver<()>>,
+    frame_rx: Option<Receiver<VideoFrame>>,
+    control_tx: Option<Sender<VideoCommand>>,
+    state: Arc<SharedVideoState>,
+    worker: Option<JoinHandle<()>>,
     config: VideoConfig,
-    cached_position: f64,
-    cached_duration: f64,
-    cached_paused: bool,
 }
 
 impl VideoController {
     pub fn new(config: VideoConfig) -> Self {
         Self {
-            child: None,
-            ipc_socket: PathBuf::from("/tmp/gallerypi-mpv.sock"),
-            exit_rx: None,
+            frame_rx: None,
+            control_tx: None,
+            state: SharedVideoState::new(),
+            worker: None,
             config,
-            cached_position: 0.0,
-            cached_duration: 0.0,
-            cached_paused: false,
         }
     }
 
-    pub fn open(&mut self, path: &str) -> Result<()> {
+    pub fn open(&mut self, path: &str) -> anyhow::Result<()> {
         self.stop();
 
-        let socket = PathBuf::from(format!(
-            "/tmp/gallerypi-mpv-{}.sock",
-            std::process::id()
-        ));
+        let state = SharedVideoState::new();
+        self.state = state.clone();
 
-        let hwdec = if self.config.hardware_decode {
-            if cfg!(target_arch = "aarch64") { "v4l2m2m-copy" } else { "auto-safe" }
-        } else {
-            "no"
-        };
+        let (frame_tx, frame_rx) = bounded::<VideoFrame>(4);
+        let (control_tx, control_rx) = bounded::<VideoCommand>(8);
 
-        let loop_arg = if self.config.loop_videos { "yes" } else { "no" };
-        let ipc_arg = format!("--input-ipc-server={}", socket.display());
-        let volume_arg = format!("--volume={}", self.config.default_volume);
+        let path = path.to_owned();
+        let cfg = self.config.clone();
+        let handle = std::thread::Builder::new()
+            .name("video-decoder".into())
+            .spawn(move || {
+                decoder::run_decoder(path, frame_tx, control_rx, state, cfg);
+            })?;
 
-        let child = std::process::Command::new("mpv")
-            .args([
-                "--fullscreen",
-                &ipc_arg,
-                "--osc=yes",              // mpv's native on-screen controls
-                "--osd-level=1",
-                "--hwdec",
-                hwdec,
-                "--loop-file",
-                loop_arg,
-                &volume_arg,
-                "--no-terminal",
-                "--input-default-bindings=yes",
-                path,
-            ])
-            .spawn()
-            .map_err(|e| anyhow!("Failed to launch mpv: {}", e))?;
-
-        self.ipc_socket = socket.clone();
-        self.cached_position = 0.0;
-        self.cached_duration = 0.0;
-        self.cached_paused = false;
-
-        // Watch for exit in a background thread
-        let (exit_tx, exit_rx) = bounded(1);
-        let mut child = child;
-        std::thread::spawn(move || {
-            child.wait().ok();
-            let _ = std::fs::remove_file(&socket);
-            exit_tx.send(()).ok();
-        });
-        self.exit_rx = Some(exit_rx);
-
+        self.frame_rx = Some(frame_rx);
+        self.control_tx = Some(control_tx);
+        self.worker = Some(handle);
         Ok(())
     }
 
-    /// Returns true if mpv has exited since last check.
+    pub fn stop(&mut self) {
+        if let Some(tx) = self.control_tx.take() {
+            tx.send(VideoCommand::Stop).ok();
+        }
+        self.frame_rx = None;
+        if let Some(handle) = self.worker.take() {
+            handle.join().ok();
+        }
+        self.state = SharedVideoState::new();
+    }
+
+    pub fn toggle_pause(&self) {
+        if let Some(ref tx) = self.control_tx {
+            let cmd = if self.state.paused.load(Ordering::Relaxed) {
+                VideoCommand::Resume
+            } else {
+                VideoCommand::Pause
+            };
+            tx.send(cmd).ok();
+        }
+    }
+
+    pub fn seek(&self, position: f64) {
+        if let Some(ref tx) = self.control_tx {
+            tx.send(VideoCommand::Seek(position)).ok();
+        }
+    }
+
+    pub fn set_volume(&self, volume: f64) {
+        if let Some(ref tx) = self.control_tx {
+            tx.send(VideoCommand::SetVolume(volume.clamp(0.0, 1.0)))
+                .ok();
+        }
+    }
+
+    /// Drain the frame channel and return the latest frame as a `slint::Image`.
+    /// Must be called from the main (Slint) thread.
+    pub fn poll_frame(&mut self) -> Option<slint::Image> {
+        let rx = self.frame_rx.as_ref()?;
+        let mut latest: Option<VideoFrame> = None;
+        while let Ok(frame) = rx.try_recv() {
+            latest = Some(frame);
+        }
+        let frame = latest?;
+        let buf = SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+            &frame.pixels,
+            frame.width,
+            frame.height,
+        );
+        Some(slint::Image::from_rgba8(buf))
+    }
+
+    /// Returns true if the decoder thread has finished (video ended or stopped).
     pub fn check_exited(&mut self) -> bool {
-        if let Some(ref rx) = self.exit_rx {
-            if rx.try_recv().is_ok() {
-                self.exit_rx = None;
+        if self.state.ended.load(Ordering::Relaxed) {
+            // Also check worker actually finished
+            if self
+                .worker
+                .as_ref()
+                .map(|h| h.is_finished())
+                .unwrap_or(true)
+            {
+                self.worker = None;
+                self.control_tx = None;
+                self.frame_rx = None;
                 return true;
             }
         }
@@ -103,132 +155,22 @@ impl VideoController {
     }
 
     pub fn is_running(&self) -> bool {
-        self.exit_rx.is_some()
+        self.worker.is_some()
     }
 
-    pub fn stop(&mut self) {
-        self.ipc_send(r#"{"command": ["quit"]}"#).ok();
-        // Brief wait for graceful exit
-        std::thread::sleep(Duration::from_millis(150));
-        let _ = std::fs::remove_file(&self.ipc_socket);
-        self.exit_rx = None;
+    pub fn get_position(&self) -> f64 {
+        f64::from_bits(self.state.position.load(Ordering::Relaxed))
     }
 
-    pub fn toggle_pause(&self) {
-        self.ipc_send(r#"{"command": ["cycle", "pause"]}"#).ok();
+    pub fn get_duration(&self) -> f64 {
+        f64::from_bits(self.state.duration.load(Ordering::Relaxed))
     }
 
-    pub fn seek(&self, position: f64) {
-        self.ipc_send(&format!(
-            r#"{{"command": ["seek", {:.3}, "absolute"]}}"#,
-            position
-        ))
-        .ok();
+    pub fn is_paused(&self) -> bool {
+        self.state.paused.load(Ordering::Relaxed)
     }
 
-    pub fn set_volume(&self, volume: f64) {
-        let vol = (volume * 100.0).clamp(0.0, 100.0);
-        self.ipc_send(&format!(
-            r#"{{"command": ["set_property", "volume", {:.1}]}}"#,
-            vol
-        ))
-        .ok();
+    pub fn is_playing(&self) -> bool {
+        !self.is_paused() && self.is_running()
     }
-
-    /// Poll position and duration from mpv IPC. Updates internal cache.
-    /// Call from a timer on the main thread.
-    pub fn poll_state(&mut self) {
-        if let Ok(pos) = self.ipc_get_f64("time-pos") {
-            self.cached_position = pos;
-        }
-        if self.cached_duration <= 0.0 {
-            if let Ok(dur) = self.ipc_get_f64("duration") {
-                self.cached_duration = dur;
-            }
-        }
-        if let Ok(paused) = self.ipc_get_bool("pause") {
-            self.cached_paused = paused;
-        }
-    }
-
-    pub fn get_position(&self) -> f64 { self.cached_position }
-    pub fn get_duration(&self) -> f64 { self.cached_duration }
-    pub fn is_paused(&self) -> bool { self.cached_paused }
-    pub fn is_playing(&self) -> bool { !self.cached_paused && self.is_running() }
-
-    // --- IPC helpers ---
-
-    fn ipc_send(&self, cmd: &str) -> Result<()> {
-        let mut stream = UnixStream::connect(&self.ipc_socket)
-            .map_err(|e| anyhow!("IPC connect: {}", e))?;
-        stream
-            .set_write_timeout(Some(Duration::from_millis(100)))
-            .ok();
-        writeln!(stream, "{}", cmd).map_err(|e| anyhow!("IPC write: {}", e))?;
-        Ok(())
-    }
-
-    fn ipc_get_f64(&self, property: &str) -> Result<f64> {
-        use std::io::{BufRead, BufReader};
-        let stream = UnixStream::connect(&self.ipc_socket)
-            .map_err(|e| anyhow!("IPC connect: {}", e))?;
-        stream
-            .set_read_timeout(Some(Duration::from_millis(80)))
-            .ok();
-        stream
-            .set_write_timeout(Some(Duration::from_millis(80)))
-            .ok();
-        let mut writer = stream.try_clone()?;
-        let cmd = format!(r#"{{"command": ["get_property", "{}"]}}"#, property);
-        writeln!(writer, "{}", cmd)?;
-
-        let reader = BufReader::new(&stream);
-        for line in reader.lines().take(5) {
-            let line = line?;
-            // {"data": 12.345, "error": "success", "request_id": 0}
-            if line.contains("\"data\"") && line.contains("\"error\": \"success\"") {
-                if let Some(val) = parse_data_f64(&line) {
-                    return Ok(val);
-                }
-            }
-        }
-        Err(anyhow!("No response for property {}", property))
-    }
-
-    fn ipc_get_bool(&self, property: &str) -> Result<bool> {
-        use std::io::{BufRead, BufReader};
-        let stream = UnixStream::connect(&self.ipc_socket)
-            .map_err(|e| anyhow!("IPC connect: {}", e))?;
-        stream
-            .set_read_timeout(Some(Duration::from_millis(80)))
-            .ok();
-        stream
-            .set_write_timeout(Some(Duration::from_millis(80)))
-            .ok();
-        let mut writer = stream.try_clone()?;
-        let cmd = format!(r#"{{"command": ["get_property", "{}"]}}"#, property);
-        writeln!(writer, "{}", cmd)?;
-
-        let reader = BufReader::new(&stream);
-        for line in reader.lines().take(5) {
-            let line = line?;
-            if line.contains("\"data\": true") {
-                return Ok(true);
-            }
-            if line.contains("\"data\": false") {
-                return Ok(false);
-            }
-        }
-        Err(anyhow!("No response for property {}", property))
-    }
-}
-
-fn parse_data_f64(json_line: &str) -> Option<f64> {
-    // Simple extraction of "data": <number> without a full JSON parser
-    let data_pos = json_line.find("\"data\":")?;
-    let after = json_line[data_pos + 7..].trim();
-    let end = after
-        .find(|c: char| c == ',' || c == '}')
-        .unwrap_or(after.len());
-    after[..end].trim().parse().ok()
 }
