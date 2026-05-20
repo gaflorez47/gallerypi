@@ -24,6 +24,8 @@ pub struct PerformanceConfig {
     pub thumb_gen_threads: usize,
     pub thumb_cache_entries: usize,
     pub scan_on_startup: bool,
+    /// Number of images to preload ahead and behind in the viewer (0 = disabled).
+    pub viewer_preload_count: usize,
 }
 
 impl Default for PerformanceConfig {
@@ -33,6 +35,7 @@ impl Default for PerformanceConfig {
             thumb_gen_threads: if cpus <= 4 { 2 } else { 4 },
             thumb_cache_entries: 150,
             scan_on_startup: true,
+            viewer_preload_count: 1,
         }
     }
 }

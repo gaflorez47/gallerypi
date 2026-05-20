@@ -55,6 +55,7 @@ pub fn run(config: Config, db_path: PathBuf) -> Result<()> {
     let gallery_ctrl = Rc::new(RefCell::new(gallery_ctrl));
     let viewer_ctrl = Rc::new(RefCell::new(ViewerController::new()));
     let video_ctrl = Rc::new(RefCell::new(VideoController::new(config.video.clone())));
+    let preload_count = config.performance.viewer_preload_count;
 
     // Row indices reported visible by GalleryRowDelegate.init; drained by thumb_timer.
     let pending_rows: Rc<RefCell<HashSet<usize>>> = Rc::new(RefCell::new(HashSet::new()));
@@ -157,6 +158,7 @@ pub fn run(config: Config, db_path: PathBuf) -> Result<()> {
                 window.set_viewer_loading(true);
                 window.set_current_screen(Screen::Viewer);
                 load_image_async(&path, &window_weak);
+                preload_adjacent(&viewer_clone, preload_count);
             }
         }
     });
@@ -224,10 +226,20 @@ pub fn run(config: Config, db_path: PathBuf) -> Result<()> {
         move || {
             let path = viewer_clone.borrow_mut().go_next().map(|i| i.path.clone());
             if let Some(path) = path {
-                if let Some(w) = window_weak.upgrade() {
-                    w.set_viewer_loading(true);
+                let cached = viewer_clone.borrow_mut().take_from_cache(&path);
+                if let Some((pixels, w, h)) = cached {
+                    if let Some(win) = window_weak.upgrade() {
+                        let buf = SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(&pixels, w, h);
+                        win.set_viewer_image(slint::Image::from_rgba8(buf));
+                        win.set_viewer_loading(false);
+                    }
+                } else {
+                    if let Some(w) = window_weak.upgrade() {
+                        w.set_viewer_loading(true);
+                    }
+                    load_image_async(&path, &window_weak);
                 }
-                load_image_async(&path, &window_weak);
+                preload_adjacent(&viewer_clone, preload_count);
             }
         }
     });
@@ -238,10 +250,20 @@ pub fn run(config: Config, db_path: PathBuf) -> Result<()> {
         move || {
             let path = viewer_clone.borrow_mut().go_prev().map(|i| i.path.clone());
             if let Some(path) = path {
-                if let Some(w) = window_weak.upgrade() {
-                    w.set_viewer_loading(true);
+                let cached = viewer_clone.borrow_mut().take_from_cache(&path);
+                if let Some((pixels, w, h)) = cached {
+                    if let Some(win) = window_weak.upgrade() {
+                        let buf = SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(&pixels, w, h);
+                        win.set_viewer_image(slint::Image::from_rgba8(buf));
+                        win.set_viewer_loading(false);
+                    }
+                } else {
+                    if let Some(w) = window_weak.upgrade() {
+                        w.set_viewer_loading(true);
+                    }
+                    load_image_async(&path, &window_weak);
                 }
-                load_image_async(&path, &window_weak);
+                preload_adjacent(&viewer_clone, preload_count);
             }
         }
     });
@@ -421,6 +443,27 @@ pub fn run(config: Config, db_path: PathBuf) -> Result<()> {
 
     window.run()?;
     Ok(())
+}
+
+/// Spawn background threads to preload adjacent images into the viewer cache.
+fn preload_adjacent(viewer_ctrl: &Rc<RefCell<ViewerController>>, count: usize) {
+    if count == 0 {
+        return;
+    }
+    let viewer = viewer_ctrl.borrow();
+    let paths = viewer.preload_paths(count);
+    let cache = viewer.preload_cache.clone();
+    drop(viewer);
+    for path in paths {
+        let cache = cache.clone();
+        let path_clone = path.clone();
+        std::thread::spawn(move || match load_image_raw(&path_clone) {
+            Ok((pixels, w, h)) => {
+                cache.lock().unwrap().insert(path_clone, (pixels, w, h));
+            }
+            Err(e) => tracing::warn!("Preload failed {}: {}", path_clone, e),
+        });
+    }
 }
 
 /// Load an image from disk in a background thread and deliver it to the viewer via the event loop.
