@@ -2,66 +2,94 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+fn default_media_dir() -> PathBuf {
+    dirs::picture_dir().unwrap_or_else(|| PathBuf::from("~/Pictures"))
+}
+fn default_grid_columns() -> u8 { 4 }
+fn default_thumbnail_size() -> u32 { 256 }
+
+fn default_thumb_gen_threads() -> usize {
+    let cpus = num_cpus::get();
+    if cpus <= 4 { 2 } else { 4 }
+}
+fn default_thumb_cache_entries() -> usize { 150 }
+fn default_scan_on_startup() -> bool { true }
+fn default_viewer_preload_count() -> usize { 1 }
+
+fn default_fullscreen() -> bool { true }
+
+fn default_volume() -> u8 { 80 }
+fn default_loop_videos() -> bool { true }
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GalleryConfig {
+    #[serde(default = "default_media_dir")]
     pub media_dir: PathBuf,
+    #[serde(default = "default_grid_columns")]
     pub grid_columns: u8,
+    #[serde(default = "default_thumbnail_size")]
     pub thumbnail_size: u32,
 }
 
 impl Default for GalleryConfig {
     fn default() -> Self {
         Self {
-            media_dir: dirs::picture_dir().unwrap_or_else(|| PathBuf::from("~/Pictures")),
-            grid_columns: 4,
-            thumbnail_size: 256,
+            media_dir: default_media_dir(),
+            grid_columns: default_grid_columns(),
+            thumbnail_size: default_thumbnail_size(),
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PerformanceConfig {
+    #[serde(default = "default_thumb_gen_threads")]
     pub thumb_gen_threads: usize,
+    #[serde(default = "default_thumb_cache_entries")]
     pub thumb_cache_entries: usize,
+    #[serde(default = "default_scan_on_startup")]
     pub scan_on_startup: bool,
     /// Number of images to preload ahead and behind in the viewer (0 = disabled).
+    #[serde(default = "default_viewer_preload_count")]
     pub viewer_preload_count: usize,
 }
 
 impl Default for PerformanceConfig {
     fn default() -> Self {
-        let cpus = num_cpus::get();
         Self {
-            thumb_gen_threads: if cpus <= 4 { 2 } else { 4 },
-            thumb_cache_entries: 150,
-            scan_on_startup: true,
-            viewer_preload_count: 1,
+            thumb_gen_threads: default_thumb_gen_threads(),
+            thumb_cache_entries: default_thumb_cache_entries(),
+            scan_on_startup: default_scan_on_startup(),
+            viewer_preload_count: default_viewer_preload_count(),
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UiConfig {
+    #[serde(default = "default_fullscreen")]
     pub fullscreen: bool,
 }
 
 impl Default for UiConfig {
     fn default() -> Self {
-        Self { fullscreen: true }
+        Self { fullscreen: default_fullscreen() }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VideoConfig {
+    #[serde(default = "default_volume")]
     pub default_volume: u8,
+    #[serde(default = "default_loop_videos")]
     pub loop_videos: bool,
 }
 
 impl Default for VideoConfig {
     fn default() -> Self {
         Self {
-            default_volume: 80,
-            loop_videos: true,
+            default_volume: default_volume(),
+            loop_videos: default_loop_videos(),
         }
     }
 }

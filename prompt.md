@@ -4,10 +4,10 @@ RUST_LOG=gallerypi=info ./target/debug/gallerypi
 
 cargo build && RUST_LOG=gallerypi=info ./target/debug/gallerypi
 
-- When image viewer open preload next and previous images
 - Zoom on images
 - Exit
 - figure out kiosk mode
+- config file defaults, don't fail
 - If no config file, file picker and save config
 
 ----------------------------
