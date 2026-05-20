@@ -242,6 +242,17 @@ fn scenario_viewer_loading(ui: &AppWindow) {
     ui.set_viewer_loading(true);
 }
 
+// ── Video Scenarios ───────────────────────────────────────────────────────────
+
+fn scenario_video_player(ui: &AppWindow) {
+    ui.set_current_screen(Screen::Video);
+    ui.set_video_frame(gradient_image(WIDTH, HEIGHT, [20, 40, 80], [80, 30, 20]));
+    ui.set_video_duration(185.0);
+    ui.set_video_position(47.0);
+    ui.set_video_volume(0.8);
+    ui.set_video_playing(true);
+}
+
 // ── Rendering ─────────────────────────────────────────────────────────────────
 
 const WIDTH: u32 = 1280;
@@ -390,6 +401,7 @@ fn main() {
         ("07_month_scroller",       scenario_month_scroller),
         ("08_viewer_image",         scenario_viewer_image),
         ("09_viewer_loading",       scenario_viewer_loading),
+        ("10_video_player",         scenario_video_player),
     ];
 
     let mut report_entries: Vec<(&str, Vec<u8>)> = vec![];
