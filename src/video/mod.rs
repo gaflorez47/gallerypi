@@ -61,7 +61,6 @@ impl VideoController {
                 &ipc_arg,
                 "--osc=yes",              // mpv's native on-screen controls
                 "--osd-level=1",
-                "--touch-devices=auto",   // touch support in mpv
                 "--hwdec",
                 hwdec,
                 "--loop-file",
