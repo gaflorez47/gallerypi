@@ -96,7 +96,10 @@ sudo systemctl enable --now gallerypi-kiosk
 ## System Dependencies
 
 ```bash
-# Video decode (replaces libmpv-dev)
+# FFmpeg 7.x (libavutil59) — required on Ubuntu, add PPAs first:
+sudo add-apt-repository ppa:savoury1/graphics
+sudo add-apt-repository ppa:savoury1/multimedia
+sudo add-apt-repository ppa:savoury1/ffmpeg7
 sudo apt install libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev
 # Required for ffmpeg-sys-next bindgen step
 sudo apt install libclang-dev

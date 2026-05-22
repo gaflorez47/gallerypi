@@ -4,11 +4,10 @@ RUST_LOG=gallerypi=info ./target/debug/gallerypi
 
 cargo build && RUST_LOG=gallerypi=info ./target/debug/gallerypi
 
-- Zoom on images
+- Zoom on images?
 - Exit
 - figure out kiosk mode
-- config file defaults, don't fail
-- If no config file, file picker and save config
+- Pick image folder from UI
 
 ----------------------------
 

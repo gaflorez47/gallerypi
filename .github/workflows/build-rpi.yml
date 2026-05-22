@@ -26,13 +26,21 @@ jobs:
 
       - name: Install dependencies
         run: |
+          sudo add-apt-repository ppa:savoury1/graphics
+          sudo add-apt-repository ppa:savoury1/multimedia
+          sudo add-apt-repository ppa:savoury1/ffmpeg7
           sudo apt-get update
           sudo apt-get install -y \
             libfontconfig1-dev \
             libfreetype-dev \
             libwayland-dev \
             libxkbcommon-dev \
-            libmpv-dev
+            libavcodec-dev \
+            libavformat-dev \
+            libavutil-dev \
+            libswscale-dev \
+            libswresample-dev \
+            libclang-dev
 
       - name: Build
         run: cargo build --release
