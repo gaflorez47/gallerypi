@@ -30,7 +30,6 @@ jobs:
           sudo add-apt-repository ppa:savoury1/ffmpeg7
           sudo apt-get update
           sudo apt-get upgrade -y
-          sudo apt-get dist-upgrade -y
           sudo apt-get install -y \
             libfontconfig1-dev \
             libfreetype-dev \
@@ -45,6 +44,12 @@ jobs:
             libswresample-dev \
             libasound2-dev \
             libclang-dev
+
+      - name: Verify FFmpeg version
+        run: |
+          pkg-config --modversion libavutil
+          ldconfig -p | grep libavutil
+          pkg-config --modversion libavutil | grep -q "^59\." || (echo "ERROR: libavutil 59.x required, got $(pkg-config --modversion libavutil)" && exit 1)
 
       - name: Build
         run: cargo build --release
