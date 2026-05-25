@@ -110,8 +110,8 @@ export component MonthScroller {
         }
     }
 
-    // Label bubble (only while dragging)
-    if is-dragging && month-entries.length > 0: Rectangle {
+    // Label bubble (shown whenever scroller is visible)
+    if (force-show || show-scroller || is-dragging) && month-entries.length > 0: Rectangle {
         x: 0px;
         y: thumb-y;
         width: label-width;
