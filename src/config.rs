@@ -20,6 +20,7 @@ fn default_fullscreen() -> bool { true }
 
 fn default_volume() -> u8 { 80 }
 fn default_loop_videos() -> bool { true }
+fn default_hw_accel() -> String { "auto".to_string() }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GalleryConfig {
@@ -83,6 +84,10 @@ pub struct VideoConfig {
     pub default_volume: u8,
     #[serde(default = "default_loop_videos")]
     pub loop_videos: bool,
+    /// Hardware acceleration mode: "auto" (try h264_v4l2m2m, fall back to SW),
+    /// "v4l2m2m" (force, fail if unavailable), or "none" (always SW decode).
+    #[serde(default = "default_hw_accel")]
+    pub hw_accel: String,
 }
 
 impl Default for VideoConfig {
@@ -90,6 +95,7 @@ impl Default for VideoConfig {
         Self {
             default_volume: default_volume(),
             loop_videos: default_loop_videos(),
+            hw_accel: default_hw_accel(),
         }
     }
 }

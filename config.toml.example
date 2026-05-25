@@ -13,6 +13,8 @@ viewer_preload_count = 1  # images to preload ahead/behind in viewer (0 = off; e
 fullscreen = true
 
 [video]
-hardware_decode = true  # uses v4l2m2m-copy on aarch64, auto-safe elsewhere
+# "auto": try h264_v4l2m2m hardware decoder, fall back to SW if unavailable
+# "none": always use software decode
+hw_accel = "auto"
 default_volume = 80     # 0–100
 loop_videos = true

@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{Receiver, Sender};
 use ffmpeg_next::{
     self as ffmpeg,
-    codec::context::Context as CodecContext,
+    codec::{context::Context as CodecContext, Id as CodecId},
     format::Pixel,
     frame,
     software::scaling::{context::Context as SwsContext, flag::Flags as SwsFlags},
@@ -64,18 +64,13 @@ pub fn run_decoder(
     let (mut video_dec, video_time_base, video_width, video_height) = {
         let stream = ictx.stream(vsidx).unwrap();
         let tb = stream.time_base();
-        let ctx = match CodecContext::from_parameters(stream.parameters()) {
-            Ok(c) => c,
-            Err(e) => {
-                error!("Video codec context: {e}");
-                state.ended.store(true, Ordering::Relaxed);
-                return;
-            }
-        };
-        let dec = match ctx.decoder().video() {
-            Ok(d) => d,
-            Err(e) => {
-                error!("Video decoder: {e}");
+        let dec = match try_hw_decoder(&stream, &config).or_else(|| {
+            let ctx = CodecContext::from_parameters(stream.parameters()).ok()?;
+            ctx.decoder().video().ok()
+        }) {
+            Some(d) => d,
+            None => {
+                error!("No video decoder available for {path}");
                 state.ended.store(true, Ordering::Relaxed);
                 return;
             }
@@ -344,6 +339,38 @@ pub fn run_decoder(
     }
 
     state.ended.store(true, Ordering::Relaxed);
+}
+
+/// Attempt to open a hardware-accelerated video decoder based on `config.hw_accel`.
+/// Returns `None` to signal the caller should fall back to software decode.
+fn try_hw_decoder(
+    stream: &ffmpeg::format::stream::Stream,
+    config: &VideoConfig,
+) -> Option<ffmpeg::codec::decoder::Video> {
+    if config.hw_accel == "none" {
+        return None;
+    }
+
+    // Only H.264 has a reliable V4L2M2M decoder on RPi4.
+    if stream.parameters().id() != CodecId::H264 {
+        return None;
+    }
+
+    let hw_codec = ffmpeg::decoder::find_by_name("h264_v4l2m2m")?;
+
+    let mut ctx = CodecContext::new_with_codec(hw_codec);
+    ctx.set_parameters(stream.parameters()).ok()?;
+
+    match ctx.decoder().video() {
+        Ok(dec) => {
+            tracing::info!("Hardware decoder h264_v4l2m2m opened");
+            Some(dec)
+        }
+        Err(e) => {
+            warn!("h264_v4l2m2m open failed ({e}), falling back to SW decode");
+            None
+        }
+    }
 }
 
 fn flush_video_decoder(dec: &mut ffmpeg::codec::decoder::Video) {
