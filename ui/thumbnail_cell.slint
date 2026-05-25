@@ -53,21 +53,21 @@ export component ThumbnailCell {
     TouchArea {
         pointer-event(e) => {
             if e.kind == PointerEventKind.down {
-                root.td-start-y  = self.mouse-y / 1px;
+                root.td-start-y  = self.absolute-position.y / 1px + self.mouse-y / 1px;
                 root.td-dragging = false;
-                root.touch-down(self.mouse-y / 1px);
+                root.touch-down(self.absolute-position.y / 1px + self.mouse-y / 1px);
             } else if e.kind == PointerEventKind.up {
                 if !root.td-dragging {
                     root.tapped(root.item-id);
                 }
-                root.touch-up(self.mouse-y / 1px);
+                root.touch-up(self.absolute-position.y / 1px + self.mouse-y / 1px);
             }
         }
         moved => {
-            if abs(self.mouse-y / 1px - root.td-start-y) > 8 {
+            if abs(self.absolute-position.y / 1px + self.mouse-y / 1px - root.td-start-y) > 8 {
                 root.td-dragging = true;
             }
-            root.touch-move(self.mouse-y / 1px);
+            root.touch-move(self.absolute-position.y / 1px + self.mouse-y / 1px);
         }
     }
 }

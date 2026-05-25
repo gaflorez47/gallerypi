@@ -81,13 +81,13 @@ component GalleryRowDelegate {
         height: root.height;
         pointer-event(e) => {
             if e.kind == PointerEventKind.down {
-                root.touch-down(self.mouse-y / 1px);
+                root.touch-down(self.absolute-position.y / 1px + self.mouse-y / 1px);
             } else if e.kind == PointerEventKind.up {
-                root.touch-up(self.mouse-y / 1px);
+                root.touch-up(self.absolute-position.y / 1px + self.mouse-y / 1px);
             }
         }
         moved => {
-            root.touch-move(self.mouse-y / 1px);
+            root.touch-move(self.absolute-position.y / 1px + self.mouse-y / 1px);
         }
     }
 
@@ -138,13 +138,16 @@ export component GalleryScreen {
     // Fling / momentum state
     private property <float> fling-velocity: 0;   // px per 16ms tick
     private property <bool>  fling-active: false;
-    private property <float> velocity-ema: 0;     // rolling velocity estimate (px/event)
 
     // Drag / scroll tracking (owned here; rows fire callbacks to update)
     private property <float> ts-start-y: 0;
     private property <float> ts-start-vp: 0;
     private property <bool>  ts-scrolling: false;
+    // Two-point velocity sample: prev and last positions+timestamps
+    private property <float> ts-prev-y: 0;
+    private property <float> ts-prev-t: 0;
     private property <float> ts-last-y: 0;
+    private property <float> ts-last-t: 0;
 
     Timer {
         interval: 16ms;
@@ -229,40 +232,41 @@ export component GalleryScreen {
                     request-row-thumbnails(idx) => { root.request-row-thumbnails(idx); }
 
                     touch-down(y) => {
-                        root.ts-start-y   = y;
-                        root.ts-start-vp  = list-view.viewport-y / 1px;
-                        root.ts-last-y    = y;
-                        root.ts-scrolling = false;
-                        root.fling-active  = false;
+                        root.ts-start-y     = y;
+                        root.ts-start-vp    = list-view.viewport-y / 1px;
+                        root.ts-prev-y      = y;
+                        root.ts-prev-t      = animation-tick() / 1ms;
+                        root.ts-last-y      = y;
+                        root.ts-last-t      = animation-tick() / 1ms;
+                        root.ts-scrolling   = false;
+                        root.fling-active   = false;
                         root.fling-velocity = 0;
-                        root.velocity-ema   = 0;
                     }
 
                     touch-move(y) => {
-                        if abs(y - root.ts-start-y) > 8 {
-                            root.ts-scrolling = true;
-                        }
+                        root.ts-scrolling = true;
                         if root.ts-scrolling {
-                            let raw-y = (root.ts-start-vp + y - root.ts-start-y) * 1px;
-                            if raw-y > 0px {
-                                list-view.viewport-y = raw-y * 0.4;
-                            } else if raw-y < root.min-viewport-y {
-                                list-view.viewport-y = root.min-viewport-y + (raw-y - root.min-viewport-y) * 0.4;
-                            } else {
-                                list-view.viewport-y = raw-y;
-                            }
-                            root.velocity-ema = root.velocity-ema * 0.6 + (y - root.ts-last-y) * 0.4;
+                            // Direct position tracking — no velocity math here
+                            let ydiff = (y - root.ts-last-y);
+                            let next-y = list-view.viewport-y +  ydiff * 1px;
+                            list-view.viewport-y = next-y;
+                            // Shift sample window: prev ← last, last ← current
+                            root.ts-prev-y = root.ts-last-y;
+                            root.ts-prev-t = root.ts-last-t;
                             root.ts-last-y = y;
+                            root.ts-last-t = animation-tick() / 1ms;
                             root.scroll-tick-counter = root.scroll-tick-counter + 1;
                         }
                     }
 
                     touch-up(y) => {
                         if root.ts-scrolling {
-                            if abs(root.velocity-ema) > 0.5
+                            let dt = root.ts-last-t - root.ts-prev-t;
+                            let velocity = dt > 0 ? (root.ts-last-y - root.ts-prev-y) / dt * 16.0 : 0.0;
+                            if abs(velocity) > 1.0
                                || list-view.viewport-y > 0px
                                || list-view.viewport-y < root.min-viewport-y {
-                                root.fling-velocity = root.velocity-ema;
+                                root.fling-velocity = velocity * 1.15;
                                 root.fling-active = true;
                             }
                         }
