@@ -80,11 +80,24 @@ impl ViewerController {
     }
 }
 
-/// Load a full-resolution image from disk as a Slint Image.
-pub fn load_image(path: &str) -> Result<slint::Image> {
+/// Load an image from disk, downscaling to fit within max_w × max_h if necessary.
+pub fn load_image(path: &str, max_w: u32, max_h: u32) -> Result<slint::Image> {
+    use fast_image_resize::{images::Image as FirImage, PixelType, Resizer};
     let img = image::open(path)?.to_rgba8();
-    let (w, h) = img.dimensions();
-    let buffer =
-        SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(img.as_raw(), w, h);
+    let (orig_w, orig_h) = img.dimensions();
+    let scale = (max_w as f32 / orig_w as f32)
+        .min(max_h as f32 / orig_h as f32)
+        .min(1.0);
+    let (pixels, w, h) = if scale < 1.0 {
+        let new_w = ((orig_w as f32 * scale).round() as u32).max(1);
+        let new_h = ((orig_h as f32 * scale).round() as u32).max(1);
+        let src = FirImage::from_vec_u8(orig_w, orig_h, img.into_raw(), PixelType::U8x4)?;
+        let mut dst = FirImage::new(new_w, new_h, PixelType::U8x4);
+        Resizer::new().resize(&src, &mut dst, None)?;
+        (dst.into_vec(), new_w, new_h)
+    } else {
+        (img.into_raw(), orig_w, orig_h)
+    };
+    let buffer = SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(&pixels, w, h);
     Ok(slint::Image::from_rgba8(buffer))
 }

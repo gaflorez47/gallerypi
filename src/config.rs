@@ -15,6 +15,8 @@ fn default_thumb_gen_threads() -> usize {
 fn default_thumb_cache_entries() -> usize { 150 }
 fn default_scan_on_startup() -> bool { true }
 fn default_viewer_preload_count() -> usize { 1 }
+fn default_viewer_max_width() -> u32 { 1920 }
+fn default_viewer_max_height() -> u32 { 1080 }
 
 fn default_fullscreen() -> bool { true }
 
@@ -53,6 +55,12 @@ pub struct PerformanceConfig {
     /// Number of images to preload ahead and behind in the viewer (0 = disabled).
     #[serde(default = "default_viewer_preload_count")]
     pub viewer_preload_count: usize,
+    /// Maximum width/height to load viewer images at. Images larger than this are
+    /// downscaled to fit, saving significant memory on high-res cameras.
+    #[serde(default = "default_viewer_max_width")]
+    pub viewer_max_width: u32,
+    #[serde(default = "default_viewer_max_height")]
+    pub viewer_max_height: u32,
 }
 
 impl Default for PerformanceConfig {
@@ -62,6 +70,8 @@ impl Default for PerformanceConfig {
             thumb_cache_entries: default_thumb_cache_entries(),
             scan_on_startup: default_scan_on_startup(),
             viewer_preload_count: default_viewer_preload_count(),
+            viewer_max_width: default_viewer_max_width(),
+            viewer_max_height: default_viewer_max_height(),
         }
     }
 }

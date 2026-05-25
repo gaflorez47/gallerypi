@@ -9,6 +9,7 @@ use crate::video::VideoController;
 use crate::viewer::ViewerController;
 use anyhow::Result;
 use crossbeam_channel::bounded;
+use fast_image_resize::{images::Image as FirImage, PixelType, Resizer};
 use slint::{ComponentHandle, SharedPixelBuffer, Timer, TimerMode};
 use std::cell::RefCell;
 use std::collections::HashSet;
@@ -56,6 +57,8 @@ pub fn run(config: Config, db_path: PathBuf) -> Result<()> {
     let viewer_ctrl = Rc::new(RefCell::new(ViewerController::new()));
     let video_ctrl = Rc::new(RefCell::new(VideoController::new(config.video.clone())));
     let preload_count = config.performance.viewer_preload_count;
+    let viewer_max_w = config.performance.viewer_max_width;
+    let viewer_max_h = config.performance.viewer_max_height;
 
     // Row indices reported visible by GalleryRowDelegate.init; drained by thumb_timer.
     let pending_rows: Rc<RefCell<HashSet<usize>>> = Rc::new(RefCell::new(HashSet::new()));
@@ -157,8 +160,8 @@ pub fn run(config: Config, db_path: PathBuf) -> Result<()> {
                 viewer_clone.borrow_mut().open(item_id as i64, month_items);
                 window.set_viewer_loading(true);
                 window.set_current_screen(Screen::Viewer);
-                load_image_async(&path, &window_weak);
-                preload_adjacent(&viewer_clone, preload_count);
+                load_image_async(&path, &window_weak, viewer_max_w, viewer_max_h);
+                preload_adjacent(&viewer_clone, preload_count, viewer_max_w, viewer_max_h);
             }
         }
     });
@@ -237,9 +240,9 @@ pub fn run(config: Config, db_path: PathBuf) -> Result<()> {
                     if let Some(w) = window_weak.upgrade() {
                         w.set_viewer_loading(true);
                     }
-                    load_image_async(&path, &window_weak);
+                    load_image_async(&path, &window_weak, viewer_max_w, viewer_max_h);
                 }
-                preload_adjacent(&viewer_clone, preload_count);
+                preload_adjacent(&viewer_clone, preload_count, viewer_max_w, viewer_max_h);
             }
         }
     });
@@ -261,9 +264,9 @@ pub fn run(config: Config, db_path: PathBuf) -> Result<()> {
                     if let Some(w) = window_weak.upgrade() {
                         w.set_viewer_loading(true);
                     }
-                    load_image_async(&path, &window_weak);
+                    load_image_async(&path, &window_weak, viewer_max_w, viewer_max_h);
                 }
-                preload_adjacent(&viewer_clone, preload_count);
+                preload_adjacent(&viewer_clone, preload_count, viewer_max_w, viewer_max_h);
             }
         }
     });
@@ -446,7 +449,7 @@ pub fn run(config: Config, db_path: PathBuf) -> Result<()> {
 }
 
 /// Spawn background threads to preload adjacent images into the viewer cache.
-fn preload_adjacent(viewer_ctrl: &Rc<RefCell<ViewerController>>, count: usize) {
+fn preload_adjacent(viewer_ctrl: &Rc<RefCell<ViewerController>>, count: usize, max_w: u32, max_h: u32) {
     if count == 0 {
         return;
     }
@@ -457,7 +460,7 @@ fn preload_adjacent(viewer_ctrl: &Rc<RefCell<ViewerController>>, count: usize) {
     for path in paths {
         let cache = cache.clone();
         let path_clone = path.clone();
-        std::thread::spawn(move || match load_image_raw(&path_clone) {
+        std::thread::spawn(move || match load_image_raw(&path_clone, max_w, max_h) {
             Ok((pixels, w, h)) => {
                 cache.lock().unwrap().insert(path_clone, (pixels, w, h));
             }
@@ -468,11 +471,11 @@ fn preload_adjacent(viewer_ctrl: &Rc<RefCell<ViewerController>>, count: usize) {
 
 /// Load an image from disk in a background thread and deliver it to the viewer via the event loop.
 /// Raw pixels are sent (Vec<u8> is Send); the slint::Image is created on the main thread.
-fn load_image_async(path: &str, window_weak: &slint::Weak<AppWindow>) {
+fn load_image_async(path: &str, window_weak: &slint::Weak<AppWindow>, max_w: u32, max_h: u32) {
     let path = path.to_owned();
     let window_weak = window_weak.clone();
     std::thread::spawn(move || {
-        match load_image_raw(&path) {
+        match load_image_raw(&path, max_w, max_h) {
             Ok((pixels, w, h)) => {
                 slint::invoke_from_event_loop(move || {
                     let buffer =
@@ -490,8 +493,37 @@ fn load_image_async(path: &str, window_weak: &slint::Weak<AppWindow>) {
     });
 }
 
-fn load_image_raw(path: &str) -> anyhow::Result<(Vec<u8>, u32, u32)> {
+/// Decode an image and downscale it to fit within max_w × max_h if it exceeds those bounds.
+/// Images already within the bounds are returned as-is (no quality loss).
+fn load_image_raw(path: &str, max_w: u32, max_h: u32) -> anyhow::Result<(Vec<u8>, u32, u32)> {
     let img = image::open(path)?.to_rgba8();
-    let (w, h) = img.dimensions();
-    Ok((img.into_raw(), w, h))
+    let (orig_w, orig_h) = img.dimensions();
+
+    let scale = (max_w as f32 / orig_w as f32)
+        .min(max_h as f32 / orig_h as f32)
+        .min(1.0);
+
+    if scale < 1.0 {
+        let new_w = ((orig_w as f32 * scale).round() as u32).max(1);
+        let new_h = ((orig_h as f32 * scale).round() as u32).max(1);
+        tracing::debug!(
+            "Scaling viewer image {}×{} → {}×{} ({:.1} MB → {:.1} MB): {}",
+            orig_w, orig_h, new_w, new_h,
+            (orig_w * orig_h * 4) as f32 / 1_048_576.0,
+            (new_w * new_h * 4) as f32 / 1_048_576.0,
+            path
+        );
+        let src = FirImage::from_vec_u8(orig_w, orig_h, img.into_raw(), PixelType::U8x4)?;
+        let mut dst = FirImage::new(new_w, new_h, PixelType::U8x4);
+        Resizer::new().resize(&src, &mut dst, None)?;
+        return Ok((dst.into_vec(), new_w, new_h));
+    }
+
+    tracing::debug!(
+        "Loading viewer image {}×{} ({:.1} MB): {}",
+        orig_w, orig_h,
+        (orig_w * orig_h * 4) as f32 / 1_048_576.0,
+        path
+    );
+    Ok((img.into_raw(), orig_w, orig_h))
 }
